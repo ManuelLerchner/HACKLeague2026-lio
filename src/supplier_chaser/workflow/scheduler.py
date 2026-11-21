@@ -48,11 +48,19 @@ def schedule(session: Session, settings: Settings, now: datetime) -> None:
         slot = int(now.timestamp()) // settings.portal_poll_seconds
         enqueue(session, kind, {}, f"{kind}:{slot}", now)
     heartbeat = session.get(SystemRow, "worker")
+    worker_status = {
+        "status": "running",
+        "capabilities": [
+            "document_investigation",
+            "reply_review",
+            "all_verified_suppliers",
+        ],
+    }
     if heartbeat:
         heartbeat.updated_at = now
-        heartbeat.value = {"status": "running"}
+        heartbeat.value = worker_status
     else:
-        session.add(SystemRow(key="worker", value={"status": "running"}, updated_at=now))
+        session.add(SystemRow(key="worker", value=worker_status, updated_at=now))
 
 
 def retry_delay(

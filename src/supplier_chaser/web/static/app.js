@@ -17,7 +17,7 @@ document.addEventListener("click", async (event) => {
     if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "Request rejected");
     notification.textContent = "Saved. The worker will process queued actions.";
     notification.hidden = false;
-    setTimeout(() => location.reload(), 1200);
+    document.dispatchEvent(new CustomEvent("supplier-chaser:action-queued", {detail: action === "approve-send" ? {savedElements: [document.querySelector("#draft-body")]} : {}}));
   } catch (error) {
     notification.textContent = error.message;
     notification.hidden = false;
@@ -49,7 +49,7 @@ document.addEventListener("submit", async (event) => {
       ? "Identity review recorded. Extraction queued; commercial terms remain unapproved."
       : "Reply rejected. No supplier claim was accepted.";
     notification.hidden = false;
-    setTimeout(() => location.reload(), 1200);
+    document.dispatchEvent(new CustomEvent("supplier-chaser:action-queued", {detail: {form}}));
   } catch (error) {
     notification.textContent = error.message;
     notification.hidden = false;

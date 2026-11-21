@@ -1,0 +1,47 @@
+<section class="panel actions" aria-labelledby="next-step-heading">
+<h2 id="next-step-heading">What happens next</h2>
+{% set held = case.messages | selectattr('direction', 'equalto', 'inbound') | selectattr('status', 'equalto', 'needs_review') | list %}
+<ul>
+{% if case.state in ['RESOLVED', 'CANCELLED'] %}
+<li><strong>Your action:</strong> No further supplier inquiry is needed for this case.</li>
+<li><strong>Next:</strong> Track physical delivery separately; a confirmed commitment does not prove receipt.</li>
+{% elif case.pending_work %}
+<li><strong>Your action:</strong> Wait for the queued action to finish. This page updates automatically.</li>
+<li><strong>Waiting on:</strong> {{ 'The worker to process the action.' if status.worker_healthy else 'The worker to come online. Work cannot progress while it is offline.' }}</li>
+<li><strong>Afterwards:</strong> Review the result or draft shown here. Processing alone does not guarantee resolution.</li>
+{% elif held %}
+<li><strong>Your action:</strong> Review the supplier reply and verify its sender and order attribution.</li>
+<li><strong>Blocked on:</strong> Your recorded review. Waiting alone will not progress this case.</li>
+<li><strong>Afterwards:</strong> The worker extracts the reply and rechecks the commitment. Conditions and costs still require authorization.</li>
+{% elif case.state in ['BLOCKED', 'ESCALATED'] %}
+<li><strong>Your action:</strong> Review the findings below. If supplier clarification is needed, prepare an updated factual inquiry.</li>
+<li><strong>Blocked on:</strong> Buyer review of unresolved evidence or a recorded blocker. Waiting alone will not progress this case.</li>
+<li><strong>Afterwards:</strong> Review the new draft, then approve it for sending. Preparing a draft does not send it or accept terms.</li>
+{% elif case.state in ['DRAFT_READY', 'NEEDS_APPROVAL'] %}
+<li><strong>Your action:</strong> Read the draft, edit it if needed, then choose “Approve factual inquiry & queue send”.</li>
+<li><strong>Blocked on:</strong> Your approval. Waiting alone will not send the email.</li>
+<li><strong>Afterwards:</strong> The worker sends the inquiry and watches for a reply. Any send blocker appears here.</li>
+{% elif case.state == 'AWAITING_REPLY' %}
+<li><strong>Your action:</strong> Wait for the supplier. The worker checks the mailbox automatically.</li>
+<li><strong>Waiting on:</strong> A supplier response. Waiting does not guarantee they will reply.</li>
+<li><strong>Afterwards:</strong> The app processes the reply or asks you to review it. Check the follow-up date shown above.</li>
+{% else %}
+<li><strong>Your action:</strong> Investigate the source evidence, then draft a supplier question if information is still missing.</li>
+<li><strong>Blocked on:</strong> Your next action. No worker action is queued for this case.</li>
+<li><strong>Afterwards:</strong> Review and approve the draft before it is sent.</li>
+{% endif %}
+</ul>
+{% if not case.pending_work %}
+{% for document in case.document_findings %}
+{% for finding in document.line_findings | default([]) %}
+{% if finding.po_line_id == case.po.po_number ~ '/' ~ case.po.line_number and finding.attribution != 'matched' %}
+<p><strong>Unresolved for this line:</strong> {{ finding.reason }}</p>
+{% endif %}{% endfor %}{% endfor %}
+{% endif %}
+{% if case.pending_work %}<a class="button secondary" href="/worker-queue">View worker queue →</a>
+{% elif held %}<a class="button" href="#conversation">Review supplier reply ↓</a>
+{% elif case.state in ['BLOCKED', 'ESCALATED'] %}<button data-action="draft" data-case="{{ case.id }}">Prepare updated clarification</button>
+{% elif case.state in ['DRAFT_READY', 'NEEDS_APPROVAL'] %}<a class="button" href="#conversation">Review draft and send ↓</a>
+{% elif case.state in ['NEW', 'INVESTIGATING'] %}<a class="button" href="/sources?q={{ case.po.po_number | urlencode }}">Investigate source evidence →</a><a class="button secondary" href="#buyer-actions">Go to draft action ↓</a>
+{% endif %}
+</section>

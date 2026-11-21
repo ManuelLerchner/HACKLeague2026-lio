@@ -1,0 +1,7 @@
+<section id="worker-queue-panel" hx-get="/worker-queue/panel" hx-trigger="every 5s" hx-swap="outerHTML">
+<div class="notice">{{ 'Worker online' if status.worker_healthy else 'Worker offline: queued work is waiting for the worker to resume.' }}<span>{{ status.jobs.get('queued', 0) }} queued · {{ status.jobs.get('running', 0) }} running · {{ status.jobs.get('failed', 0) }} failed · {{ status.jobs.get('succeeded', 0) }} completed</span></div>
+<div class="panel"><div class="table-scroll"><table><thead><tr><th>Operation</th><th>Status</th><th>Attempts</th><th>Scheduled</th><th>Detail</th></tr></thead><tbody>
+{% for entry in jobs %}{% set job = entry.job %}<tr><td>{{ job.job_type | replace('_', ' ') | capitalize }}<small><code>{{ job.id[:8] }}</code></small></td><td>{{ job.status }}</td><td>{{ job.attempts }}</td><td>{{ job.run_after | localtime }}</td><td>{{ job.last_error or ('Processing' if job.status == 'running' else 'Waiting for worker / scheduled time') }}{% if entry.case_id %}<br><a href="/cases/{{ entry.case_id }}">Open case →</a>{% endif %}{% if entry.source_id %}<br><a href="/sources/{{ entry.source_id }}">Open source →</a>{% endif %}</td></tr>
+{% else %}<tr><td colspan="5">No outstanding work.</td></tr>{% endfor %}
+</tbody></table></div></div><p>Showing up to 100 outstanding jobs. Counts include the full queue.</p>
+</section>

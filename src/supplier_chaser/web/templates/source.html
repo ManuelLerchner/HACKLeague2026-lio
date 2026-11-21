@@ -1,6 +1,19 @@
 {% extends 'base.html' %}{% block content %}
-<section class="page-heading"><div class="eyebrow">SOURCE REVIEW · {{ source.parse_status }}</div><h1>Review this source.</h1><p>{{ source.path }}</p><a href="/sources/{{ source.id }}/download">Download original evidence</a></section>
+<section class="page-heading"><div class="eyebrow">SOURCE REVIEW · {{ source.parse_status }}</div><h1>Review this source.</h1><p>{{ source.path }}</p><a class="button" href="/sources/{{ source.id }}/preview" data-preview-url="/sources/{{ source.id }}/preview" data-download-url="/sources/{{ source.id }}/download" data-preview-title="{{ source.path }}">Preview original evidence</a> <a class="button secondary" href="/sources/{{ source.id }}/download">Download original ↓</a></section>
 {% if source.error %}<div class="notice">{{ source.error }}</div>{% endif %}
+{% set analyses = document_analyses | default([]) %}
+{% for fact in analyses %}{% set analysis = fact.normalized_json %}
+<section class="panel"><div class="panel-heading"><h2>Automatic document investigation</h2><span class="state">{{ analysis.status.replace('_', ' ').title() }}</span></div>
+<div class="mapping-form"><p><strong>{{ analysis.summary }}</strong></p>
+{% if analysis.status in ['pending', 'queued', 'running', 'investigating'] %}<p role="status">The worker is investigating this document automatically. No manual line selection is needed. This page updates when the result is ready.</p>{% endif %}
+{% if analysis.line_findings %}<div class="table-scroll"><table><thead><tr><th>Order line</th><th>Quantity</th><th>Requested</th><th>Document date</th><th>Finding</th></tr></thead><tbody>
+{% for finding in analysis.line_findings %}<tr><td>{{ finding.po_line_id }}</td><td>{{ finding.quantity if finding.quantity is not none else 'Unknown' }}</td><td>{{ finding.requested_date or 'Unknown' }}</td><td>{{ finding.promised_date or 'Unknown' }}</td><td>
+{% if finding.date_gap_days is not none and finding.date_gap_days > 0 %}<strong>{% if finding.attribution == 'matched' %}{{ finding.date_gap_days }} days after requested{% else %}Potential {{ finding.date_gap_days }}-day delay; attribution unresolved{% endif %}</strong>{% endif %}
+<p>{{ finding.reason }}</p></td></tr>{% endfor %}
+</tbody></table></div>{% endif %}
+<p>Document statements remain supplier claims. Unresolved attribution is not a confirmed delay, and no shipping conditions or costs are accepted by this analysis.</p>
+</div></section>
+{% endfor %}
 {% for table in tables %}
 <section class="panel"><div class="panel-heading"><h2>{{ table.locator }} · {{ table.data.rows|length }} rows</h2></div>
 <div class="table-scroll"><table><thead><tr>{% for column in table.data.columns %}<th>{{ column }}</th>{% endfor %}</tr></thead><tbody>{% for row in table.data.rows[:5] %}<tr>{% for column in table.data.columns %}<td>{{ row['values'][column] }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>
@@ -22,11 +35,13 @@
 <section class="panel"><div class="panel-heading"><h2>{{ fact.record_locator }} · extracted text</h2></div>
 <div class="mapping-form"><p>This is untrusted source text. Review the document and its order attribution before extracting a proposed commitment.</p>
 <pre class="source-text">{{ fact.normalized_json.text[:30000] }}</pre>
-{% if status.llm_provider != "fixture" and matching_orders[fact.id] %}
+{% if analyses %}
+<div class="notice">Document investigation results are shown above. Use those findings instead of assigning this page to an order line manually.</div>
+{% elif status.llm_provider != "fixture" and matching_orders[fact.id] %}
 <form data-extraction-form data-fact="{{ fact.id }}">
-<label>Link this evidence to an existing order<select name="po_line_id" required><option value="">Select an order line</option>
-{% for po in matching_orders[fact.id] %}<option value="{{ po.id }}">{{ po.id }} · {{ po.part_number }}</option>{% endfor %}
-</select></label><button type="submit">Extract proposed commitment</button><pre class="mapping-result" aria-live="polite"></pre></form>
+<input type="hidden" name="po_line_id" value="{{ matching_orders[fact.id][0].id }}">
+<p>The worker checks all matching order lines together. You do not need to choose a line or infer the supplier's numbering.</p>
+<button type="submit">Investigate all order items</button><pre class="mapping-result" aria-live="polite"></pre></form>
 {% elif not has_imported_orders %}
 <div class="notice">No order lines have been imported yet. <a href="/sources?q=purchase">Review and map an order table</a> before linking a supplier confirmation.</div>
 {% elif not matching_orders[fact.id] %}

@@ -28,15 +28,21 @@ scanned images, DOCX and layouts without usable text/table structure remain manu
 
 ## AI extraction
 
-With a model configured, source text offers extraction only when it identifies an imported PO
-and material. Select the corresponding order line explicitly. Policy documents without order
-references show an explanation instead of an empty selector. Extraction is a separate queued
-action; the portal poll does not call the model for every unfamiliar document.
+With a model configured, `AUTO_INVESTIGATE_DOCUMENTS=true` schedules whole-document
+investigation when text identifies an imported PO. All candidate order lines are considered
+together. Item numbers are not silently mapped to PO line numbers; ambiguous attribution
+requires clarification. Missing units remain unknown. Approved table mappings still require review.
 
-The selected order supplies attribution only. Quantities/dates must be supported by a verbatim
-quote from the original source, not by the supplied order context. Confirmations retain their
-conditions and risks. Uncertain units, identities, dates or terms keep cases unresolved.
-The original source stays reviewable; an extracted promise never proves physical delivery.
+Quantities and dates must be supported by quoted source text. Conditions and risks remain
+visible and are never accepted automatically. Investigation may prepare a factual draft for
+buyer approval; it does not send it. `AUTO_DRAFT=false` does not disable document investigation.
+Set `AUTO_INVESTIGATE_DOCUMENTS=false` to stop automatic document model calls.
+
+Use **Preview original evidence** to open an in-app preview. Downloads remain available
+explicitly. Source and case pages update after worker actions while preserving unsaved edits.
+The **Worker queue** shows real queued/running/failed jobs; missing analysis alone is not a
+queued job. **What happens next** on a case explains the next buyer action and whether waiting
+will help. Escalated drafts must be replaced before they can be approved for sending.
 
 ## Separate local live workspace
 
@@ -51,11 +57,11 @@ SUPPLIER_CHASER_ENV_FILE=.env.live pixi run worker
 
 Set `PORTAL_MODE=http`, a reviewed portal contract, `MAIL_MODE=smtp_imap`, and
 `LLM_PROVIDER=openai` only after their connection checks pass. Use `AUTO_DRAFT=false` during
-bulk import so creating cases does not trigger bulk model calls. Choose a case to draft manually.
+bulk import and set `AUTO_INVESTIGATE_DOCUMENTS=false` if model calls must wait for manual review.
 Changing `.env.live` requires restarting the API and worker.
 
 Start with `DRY_RUN=true` and `OUTBOUND_MAIL_ENABLED=false`. For an authorized live test, configure
-an exact verified recipient allowlist, registered sender and verified mailbox, then enable
+verified supplier contacts, a registered sender and verified mailbox, then enable
 sending and approve one factual draft. Send caps include previously recorded sent messages.
 Live IMAP messages remain subject to identity review; the current adapter does not automatically
 trust From headers or resolve cases from a real-mail promise.

@@ -26,4 +26,5 @@ jobs:
       - run: pixi run typecheck
       - run: pixi run db-upgrade
       - run: pixi run test
+      - run: node scripts/test_progress.cjs && node scripts/test_preview.cjs
       - run: pixi run alembic downgrade base && pixi run db-upgrade

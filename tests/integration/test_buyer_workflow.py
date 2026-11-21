@@ -157,3 +157,34 @@ def test_action_group_precedes_priority_and_manual_fixture_draft_never_sends(
         detail = client.get(f"/api/v1/cases/{action_id}").json()
         assert detail["state"] == "NEEDS_APPROVAL"
         assert [m["status"] for m in detail["messages"]] == ["draft"]
+
+
+def test_escalated_draft_is_held_and_can_be_replaced(seeded, factory, clock, worker):
+    from datetime import timedelta
+
+    from supplier_chaser.domain.models import State
+
+    seeded.auto_draft = False
+    worker.tick()
+    with TestClient(create_app(seeded, factory, clock)) as client:
+        client.headers["Authorization"] = "Bearer test-secret"
+        case = client.get("/api/v1/cases").json()[0]
+        url = f"/api/v1/cases/{case['id']}"
+        client.post(url + "/draft")
+        worker.drain()
+        with factory.begin() as session:
+            row = session.get(CaseRow, case["id"])
+            row.state = State.ESCALATED
+            row.updated_at = clock.now() + timedelta(seconds=1)
+        page = client.get(f"/cases/{case['id']}").text
+        assert "What happens next" in page
+        assert "Waiting alone will not progress" in page
+        assert "Prepare updated clarification" in page
+        assert 'data-action="approve-send"' not in page
+        assert client.post(url + "/approve-send", json={}).status_code == 409
+        assert client.post(url + "/draft").status_code == 202
+        worker.drain()
+        detail = client.get(url).json()
+        assert detail["state"] == "NEEDS_APPROVAL"
+        assert sorted(m["status"] for m in detail["messages"]) == ["draft", "superseded"]
+        assert 'data-action="approve-send"' in client.get(f"/cases/{case['id']}").text
