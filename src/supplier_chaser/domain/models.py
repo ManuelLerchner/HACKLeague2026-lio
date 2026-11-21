@@ -124,6 +124,7 @@ class Claim(Value):
     confirmation: Confirmation
     baseline_terms_verified: bool = False
     acknowledged_risks: list[str] = []
+    unit_source: str | None = None
 
 
 class Discrepancy(Value):

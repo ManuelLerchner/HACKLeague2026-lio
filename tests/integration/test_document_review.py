@@ -342,3 +342,50 @@ def test_missing_unit_prefills_from_order_and_validates(settings, factory, clock
         original = Confirmation.model_validate(claim.data).model_copy(update={"unit": None})
         confirmed, _ = reviewed_values(session, original, review, None)
         assert confirmed.unit == "PC"
+
+
+def add_material_master(session, now, uom="PC", path="soony/master/components.csv"):
+    source = SourceFile(
+        path=path,
+        checksum=f"master-{path}",
+        media_type="text/csv",
+        parse_status="needs_review",
+        blob_ref=f"master-{path}",
+        downloaded_at=now,
+    )
+    session.add(source)
+    session.flush()
+    session.add(
+        SourceFact(
+            source_file_id=source.id,
+            record_locator="table:csv",
+            fact_type="table",
+            normalized_json={
+                "columns": ["component_id", "uom"],
+                "rows": [{"locator": "row:2", "values": {"component_id": "TEST-PART", "uom": uom}}],
+            },
+            extracted_at=now,
+        )
+    )
+    session.flush()
+
+
+@pytest.mark.parametrize(
+    ("uom", "path", "expected"),
+    [
+        ("PC", "soony/master/components.csv", "PC"),
+        ("KG", "soony/master/components.csv", None),
+        ("PC", "suppliers/synthetic/components.csv", None),
+    ],
+)
+def test_unitless_claim_takes_unit_only_from_agreeing_material_master(
+    settings, factory, clock, uom, path, expected
+):
+    with factory.begin() as session:
+        seed_document(session, clock.now())
+        add_material_master(session, clock.now(), uom, path)
+        claim = reply_claim(session, clock.now(), [])
+        claim.data = {**claim.data, "unit": None, "terms": ""}
+        claims = CommitmentRepository(session).get_claims("TEST-ORDER/2")
+        assert claims[0].confirmation.unit == expected
+        assert claims[0].unit_source == ("soony/master/components.csv" if expected else None)

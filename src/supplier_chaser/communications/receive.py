@@ -97,7 +97,9 @@ def supersede_drafts(
             select(MessageRow).where(
                 MessageRow.case_id == case.id,
                 MessageRow.direction == "outbound",
-                MessageRow.status == "draft",
+                # A blocked inquiry was never sent; resuming it after newer evidence would
+                # send an outdated question.
+                MessageRow.status.in_(["draft", "blocked"]),
             )
         )
     )

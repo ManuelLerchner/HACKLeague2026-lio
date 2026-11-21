@@ -120,6 +120,21 @@ def validate_quantity_unit(unit: str | None, quote: str) -> str | None:
     return canonical
 
 
+def unit_beside_quantity(quote: str, quantity: Decimal) -> str | None:
+    """The unit word written directly after the quoted quantity, when the model omitted it."""
+    units = set()
+    for match in re.finditer(r"\d[\d,. \u00a0\u202f]*\d|\d", quote):
+        if quantity not in quantities_in_quote(match.group()):
+            continue
+        following = quote[match.end() : match.end() + 12]
+        for code, words in UNIT_ALIASES.items():
+            if any(
+                re.match(r"\s*" + re.escape(word) + r"(?![a-z])", following, re.I) for word in words
+            ):
+                units.add(code)
+    return units.pop() if len(units) == 1 else None
+
+
 def extract_validated(extractor: LLMExtractor, text: str) -> Confirmation:
     for attempt in range(2):
         try:
@@ -128,7 +143,10 @@ def extract_validated(extractor: LLMExtractor, text: str) -> Confirmation:
                 update={"evidence_quote": source_quote(text, result.evidence_quote, segments=True)}
             )
             result = result.model_copy(
-                update={"unit": validate_quantity_unit(result.unit, result.evidence_quote)}
+                update={
+                    "unit": validate_quantity_unit(result.unit, result.evidence_quote)
+                    or unit_beside_quantity(result.evidence_quote, result.quantity)
+                }
             )
             for delivery in result.deliveries:
                 if delivery.quantity not in quantities_in_quote(result.evidence_quote):

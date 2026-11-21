@@ -357,3 +357,24 @@ def test_new_evidence_replaces_stale_draft_on_escalated_case(settings, factory, 
         assert {statuses[m] for m in stale} == {"superseded"}
         assert sorted(s for m, s in statuses.items() if m not in stale) == ["draft", "draft"]
         assert set(session.scalars(select(CaseRow.state))) == {"NEEDS_APPROVAL"}
+
+
+def test_new_evidence_retires_rate_limited_inquiry(settings, factory, clock):
+    from supplier_chaser.agent.discover import request_document_investigation
+
+    settings.llm_provider = "openai"
+    model = FixtureLLM()
+    with factory.begin() as session:
+        source_id = seed_document(session, clock.now())
+        run_investigation(session, settings, clock, model, source_id)
+        blocked = session.scalars(select(MessageRow)).first()
+        blocked.status = "blocked"
+        blocked.metadata_json = {
+            **blocked.metadata_json,
+            "block_reasons": ["Supplier send limit reached: 2 sends; limit 2."],
+        }
+        for case in session.scalars(select(CaseRow)):
+            case.state = "ESCALATED"
+        request_document_investigation(session, source_id, clock.now(), retry=True)
+        run_investigation(session, settings, clock, model, source_id)
+        assert blocked.status == "superseded"

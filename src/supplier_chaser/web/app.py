@@ -337,7 +337,8 @@ def create_app(
                     "block_reasons": m.metadata_json.get("block_reasons", []),
                     "retry_after": m.metadata_json.get("scheduled_send_at"),
                     "can_retry_send": (
-                        m.status == "blocked"
+                        case.state == State.BLOCKED
+                        and m.status == "blocked"
                         and len(m.metadata_json.get("block_reasons", [])) == 1
                         and m.metadata_json["block_reasons"][0].startswith(
                             "Supplier send limit reached"
