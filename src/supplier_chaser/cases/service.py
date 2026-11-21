@@ -118,7 +118,7 @@ def reconcile_line(session: Session, line_id: str, settings: Settings, now: date
             record_event(session, issue_case, "case.created", issue.model_dump(mode="json"), now)
             if issue.issue_type == "CONTRADICTORY_EVIDENCE":
                 move(session, issue_case, State.ESCALATED, now, issue.explanation)
-            else:
+            elif settings.auto_draft:
                 enqueue(
                     session,
                     "draft",

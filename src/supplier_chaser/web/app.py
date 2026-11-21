@@ -35,6 +35,7 @@ from supplier_chaser.cases.service import move, record_event
 from supplier_chaser.clock import Clock, SystemClock
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.models import State
+from supplier_chaser.web.sources import register_source_routes
 from supplier_chaser.workflow.jobs import enqueue
 
 ROOT = Path(__file__).parent
@@ -459,4 +460,5 @@ def create_app(
                 },
             )
 
+    register_source_routes(app, factory, settings, clock, authorized, templates, status)
     return app

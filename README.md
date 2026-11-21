@@ -66,6 +66,10 @@ PP-07 and launch-workbook interpretation are not claimed.
 An opt-in [live connection workflow](docs/live-checks.md) uses GitHub environment secrets to
 check external connections without sending mail. Normal push/PR tests remain offline.
 
+Unfamiliar tables now appear in **Source review** with mapping suggestions, a validated preview
+and explicit approval. PDF text can be linked to an imported order for a separately requested
+model extraction. See [source review and local live setup](docs/source-review.md).
+
 See [assumptions](docs/assumptions.md), [integration contracts](docs/integration-contracts.md),
 and the [exact demo/deployment procedure](docs/demo-runbook.md).
 

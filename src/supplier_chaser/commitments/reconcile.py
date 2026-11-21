@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from supplier_chaser.domain.models import (
     Assessment,
@@ -43,7 +44,13 @@ def reconcile(
     if not po.unit or not po.requested_delivery:
         return Assessment(status="UNKNOWN", reason="Order unit or requested date is missing.")
     if not applicable:
-        if now < po.ordered_at + timedelta(hours=grace_hours):
+        ordered_upper_bound = po.ordered_at
+        if not isinstance(ordered_upper_bound, datetime):
+            # A date represents an interval; only chase once its latest possible time is past grace.
+            ordered_upper_bound = datetime.combine(
+                ordered_upper_bound + timedelta(days=1), time.min, ZoneInfo("Europe/Berlin")
+            )
+        if now < ordered_upper_bound + timedelta(hours=grace_hours):
             return Assessment(status="GRACE", reason="Within confirmation grace period.")
         missing = issue(IssueType.MISSING_CONFIRMATION, "No attributable supplier confirmation.")
         return Assessment(status="DISCREPANCY", issues=[missing], reason=missing.explanation)

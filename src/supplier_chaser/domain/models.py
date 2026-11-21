@@ -66,7 +66,7 @@ class POLine(Value):
     ordered_qty: Decimal = Field(gt=0)
     unit: str | None
     requested_delivery: date | None
-    ordered_at: AwareDatetime
+    ordered_at: AwareDatetime | date
     document_version: int = Field(default=1, ge=1)
     launch_critical: bool = False
     lead_time_hours: int | None = Field(default=None, ge=0)
@@ -182,7 +182,7 @@ class FileMetadata(Value):
 
 
 class ParsedFact(Value):
-    kind: Literal["supplier", "po", "confirmation", "text"]
+    kind: Literal["supplier", "po", "confirmation", "text", "table"]
     locator: str
     data: dict
 
