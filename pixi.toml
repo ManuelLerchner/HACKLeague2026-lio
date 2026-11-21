@@ -28,6 +28,10 @@ time-machine = ">=2.16,<3"
 respx = ">=0.22,<1"
 postgresql = "17.*"
 hatchling = ">=1.27,<2"
+tesseract = ">=5.5,<6"
+pytesseract = ">=0.3.13,<0.4"
+pypdfium2 = ">=4.30,<6"
+pillow = ">=11,<13"
 
 [pypi-dependencies]
 supplier-chaser = { path = ".", editable = true }

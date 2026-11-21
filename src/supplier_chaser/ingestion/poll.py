@@ -11,6 +11,7 @@ from supplier_chaser.adapters.portal_fixture import validate_path
 from supplier_chaser.agent.interpret_reply import extract_validated
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.models import Confirmation, POLine, Supplier
+from supplier_chaser.ingestion.ocr import OCR
 from supplier_chaser.ingestion.parse import parse
 from supplier_chaser.ports.llm import LLMExtractor
 from supplier_chaser.ports.portal import PortalClient
@@ -157,7 +158,7 @@ def poll_portal(
             blob_ref = digest
             (directory / digest).write_bytes(content)
             source.blob_ref = blob_ref
-            parsed = parse(metadata.path, content)
+            parsed = parse(metadata.path, content, OCR.from_settings(settings))
             review_required = False
             with session.begin_nested():
                 for item in parsed:
@@ -167,6 +168,7 @@ def poll_portal(
                         fact_type=item.kind,
                         normalized_json=item.data,
                         extracted_at=now,
+                        confidence="ocr" if "ocr" in item.data else "deterministic",
                     )
                     session.add(fact)
                     session.flush()
