@@ -188,3 +188,38 @@ def test_escalated_draft_is_held_and_can_be_replaced(seeded, factory, clock, wor
         assert detail["state"] == "NEEDS_APPROVAL"
         assert sorted(m["status"] for m in detail["messages"]) == ["draft", "superseded"]
         assert 'data-action="approve-send"' in client.get(f"/cases/{case['id']}").text
+
+
+def test_held_reply_blocks_approval_even_if_old_draft_state_remains(seeded, factory, clock, worker):
+    seeded.auto_draft = False
+    worker.tick()
+    with TestClient(create_app(seeded, factory, clock)) as client:
+        client.headers["Authorization"] = "Bearer test-secret"
+        case = client.get("/api/v1/cases").json()[0]
+        url = f"/api/v1/cases/{case['id']}"
+        client.post(url + "/draft")
+        worker.drain()
+        with factory.begin() as session:
+            session.add(
+                MessageRow(
+                    case_id=case["id"],
+                    external_message_id="held-review@example.test",
+                    direction="inbound",
+                    sender="supplier@example.test",
+                    recipients=[seeded.mail_from],
+                    subject="Reply",
+                    body="Please review the confirmation.",
+                    status="needs_review",
+                    sent_or_received_at=clock.now(),
+                    correlation_key=case["id"],
+                    metadata_json={},
+                )
+            )
+        response = client.post(url + "/approve-send", json={})
+        assert response.status_code == 409
+        assert "received supplier reply" in response.json()["detail"]
+        page = client.get(f"/cases/{case['id']}").text
+        assert 'data-action="approve-send"' not in page
+        assert "Review supplier reply" in page
+        assert client.get(url).json()["next_action"] == "Review supplier reply"
+        assert client.post(url + "/draft").status_code == 409

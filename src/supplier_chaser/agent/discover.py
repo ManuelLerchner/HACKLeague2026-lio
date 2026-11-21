@@ -8,9 +8,11 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from supplier_chaser.adapters.db import JobRow, PORow, SourceFact, SourceFile
+from supplier_chaser.adapters.db import JobRow, PORow, SourceFact, SourceFile, uid
 from supplier_chaser.config import Settings
 from supplier_chaser.workflow.jobs import enqueue
+
+INVESTIGATION_VERSION = "document-investigation-v2"
 
 
 def mentions(text: str, identifier: str) -> bool:
@@ -24,6 +26,9 @@ def relevant_documents(session: Session) -> list[tuple[SourceFile, str, list[POR
         select(SourceFact).where(SourceFact.fact_type == "text").order_by(SourceFact.record_locator)
     ):
         texts.setdefault(fact.source_file_id, []).append(fact.normalized_json["text"])
+    retries: dict[str, list[str]] = {}
+    for fact in session.scalars(select(SourceFact).where(SourceFact.fact_type == "document_retry")):
+        retries.setdefault(fact.source_file_id, []).append(fact.id)
     seen = set()
     result = []
     for source in session.scalars(
@@ -40,15 +45,67 @@ def relevant_documents(session: Session) -> list[tuple[SourceFile, str, list[POR
         if matching:
             fingerprint = hashlib.sha256(
                 json.dumps(
-                    [
-                        {"data": po.data, "source_fact_id": po.source_fact_id}
-                        for po in sorted(matching, key=lambda p: p.id)
-                    ],
+                    {
+                        "version": INVESTIGATION_VERSION,
+                        "orders": [
+                            {"data": po.data, "source_fact_id": po.source_fact_id}
+                            for po in sorted(matching, key=lambda p: p.id)
+                        ],
+                        "retry_requests": sorted(retries.get(source.id, [])),
+                    },
                     sort_keys=True,
                 ).encode()
             ).hexdigest()
             result.append((source, text, matching, fingerprint))
     return result
+
+
+def request_document_investigation(
+    session: Session, source_id: str, now: datetime, *, retry: bool = False
+) -> JobRow:
+    source = session.scalar(select(SourceFile).where(SourceFile.id == source_id).with_for_update())
+    if source is None:
+        raise ValueError("Source not found")
+    document = next((item for item in relevant_documents(session) if item[0].id == source_id), None)
+    if document is None:
+        raise ValueError("No current source text identifies an imported order")
+    _, _, orders, fingerprint = document
+    key = f"investigate-document:{source_id}:{fingerprint}"
+    existing = session.scalar(select(JobRow).where(JobRow.idempotency_key == key))
+    if existing and existing.status in {"queued", "running"}:
+        return existing
+    analysis = session.scalar(
+        select(SourceFact).where(
+            SourceFact.source_file_id == source_id,
+            SourceFact.record_locator == f"investigation:{fingerprint}",
+        )
+    )
+    if retry and (existing or analysis):
+        session.add(
+            SourceFact(
+                source_file_id=source_id,
+                record_locator=f"retry:{uid()}",
+                fact_type="document_retry",
+                normalized_json={"previous_projection": fingerprint},
+                extracted_at=now,
+                confidence="explicit_retry_request",
+            )
+        )
+        session.flush()
+        document = next(item for item in relevant_documents(session) if item[0].id == source_id)
+        _, _, orders, fingerprint = document
+        key = f"investigate-document:{source_id}:{fingerprint}"
+    return enqueue(
+        session,
+        "investigate_document",
+        {
+            "source_file_id": source_id,
+            "po_line_ids": [po.id for po in orders],
+            "projection_hash": fingerprint,
+        },
+        key,
+        now,
+    )
 
 
 def discover_documents(session: Session, settings: Settings, now: datetime) -> int:
@@ -108,8 +165,24 @@ def all_document_findings(session: Session) -> dict[str, list[dict]]:
                 fallback,
             ),
         }
+        from supplier_chaser.ingestion.document_review import review_findings
+
+        reviewed = review_findings(session, source.id, fingerprint)
+        if reviewed:
+            finding.update(reviewed)
         for po in orders:
-            result.setdefault(po.id, []).append(finding)
+            per_line = dict(finding)
+            lines = [
+                line for line in finding.get("line_findings", []) if line["po_line_id"] == po.id
+            ]
+            if reviewed and lines:
+                per_line["status"] = (
+                    "complete"
+                    if all(line["attribution"] == "matched" for line in lines)
+                    else "ambiguous"
+                )
+                per_line["summary"] = "\n".join(line["reason"] for line in lines)
+            result.setdefault(po.id, []).append(per_line)
     return result
 
 

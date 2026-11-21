@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 from sqlalchemy import func, select
 
@@ -14,7 +16,11 @@ def draft(settings):
     return MessageRow(
         sender=settings.mail_from,
         recipients=["supplier@example.test"],
-        metadata_json={"approved_by": "buyer"},
+        body="Please confirm the order.",
+        metadata_json={
+            "approved_by": "buyer",
+            "approved_body_sha256": hashlib.sha256(b"Please confirm the order.").hexdigest(),
+        },
     )
 
 

@@ -1,3 +1,4 @@
+import hashlib
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
@@ -8,6 +9,7 @@ from supplier_chaser.cases.service import move, record_event
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.models import Outbound, SendResult, State
 from supplier_chaser.ports.mail import MailGateway
+from supplier_chaser.workflow.jobs import enqueue
 
 
 def send_block_reasons(
@@ -32,6 +34,12 @@ def send_block_reasons(
             reasons.append("Inbound mailbox has not been verified.")
     if not (message.metadata_json.get("approved_by") or message.metadata_json.get("safe_template")):
         reasons.append("Draft has no buyer approval or approved safe template.")
+    if (
+        message.metadata_json.get("approved_by")
+        and message.metadata_json.get("approved_body_sha256")
+        != hashlib.sha256(message.body.encode()).hexdigest()
+    ):
+        reasons.append("Draft body differs from the approved version; review and approve it again.")
     if message.sender != settings.mail_from:
         reasons.append("Draft sender differs from the configured team sender.")
     if supplier_sent_count >= settings.max_supplier_sends_per_day:
@@ -50,6 +58,13 @@ def send_message(
     factory: sessionmaker, message_id: str, gateway: MailGateway, settings: Settings, now: datetime
 ) -> None:
     with factory.begin() as session:
+        case_id = session.scalar(select(MessageRow.case_id).where(MessageRow.id == message_id))
+        if case_id is None:
+            return
+        # Approval/reply review also locks the case before changing its messages.
+        case = session.scalar(select(CaseRow).where(CaseRow.id == case_id).with_for_update())
+        if case is None:
+            return
         message = session.scalar(
             select(MessageRow).where(MessageRow.id == message_id).with_for_update()
         )
@@ -61,9 +76,6 @@ def send_message(
             "blocked",
             "cancelled",
         }:
-            return
-        case = session.get(CaseRow, message.case_id)
-        if case is None:
             return
         if message.status == "sending":
             message.status = "send_uncertain"
@@ -79,16 +91,27 @@ def send_message(
         if case.active_key is None or case.state not in {State.DRAFT_READY, State.NEEDS_APPROVAL}:
             message.status = "cancelled"
             return
+        if session.scalar(
+            select(MessageRow.id).where(
+                MessageRow.case_id == case.id,
+                MessageRow.direction == "inbound",
+                MessageRow.status.in_(["needs_review", "review_queued"]),
+            )
+        ):
+            message.status = "blocked"
+            reason = "A supplier reply awaits review; process it before sending another inquiry."
+            message.metadata_json = {**message.metadata_json, "block_reasons": [reason]}
+            move(session, case, State.BLOCKED, now, reason)
+            return
         po = session.get(PORow, case.po_line_id)
         assert po is not None
         supplier = session.scalar(
             select(SupplierRow).where(SupplierRow.id == po.supplier_id).with_for_update()
         )
         live = settings.mail_mode != "fixture"
-        sent_count = (
-            session.scalar(
-                select(func.count())
-                .select_from(MessageRow)
+        recent_sends = list(
+            session.scalars(
+                select(MessageRow.sent_or_received_at)
                 .join(CaseRow, MessageRow.case_id == CaseRow.id)
                 .join(PORow, CaseRow.po_line_id == PORow.id)
                 .where(
@@ -97,9 +120,10 @@ def send_message(
                     MessageRow.sent_or_received_at >= now - timedelta(days=1),
                     PORow.supplier_id == po.supplier_id,
                 )
+                .order_by(MessageRow.sent_or_received_at)
             )
-            or 0
         )
+        sent_count = len(recent_sends)
         case_count = (
             session.scalar(
                 select(func.count())
@@ -112,7 +136,8 @@ def send_message(
             )
             or 0
         )
-        reasons = send_block_reasons(message, supplier, settings, sent_count, case_count)
+        # A supplier rate limit defers an otherwise authorized inquiry; other guards stop it.
+        reasons = send_block_reasons(message, supplier, settings, 0, case_count)
         if reasons:
             message.status = "blocked"
             message.metadata_json = {**message.metadata_json, "block_reasons": reasons}
@@ -124,11 +149,38 @@ def send_message(
                 " ".join(reasons),
             )
             return
+        if sent_count >= settings.max_supplier_sends_per_day:
+            run_after = recent_sends[-settings.max_supplier_sends_per_day] + timedelta(
+                days=1, microseconds=1
+            )
+            deferred = enqueue(
+                session,
+                "send",
+                {"case_id": case.id, "message_id": message.id},
+                f"send-deferred:{message.id}:{run_after.isoformat()}",
+                now,
+            )
+            deferred.run_after = run_after
+            message.status = "queued"
+            message.metadata_json = {
+                **message.metadata_json,
+                "scheduled_send_at": run_after.isoformat(),
+                "rate_limit_reason": "Supplier daily send limit reached; inquiry scheduled.",
+            }
+            record_event(
+                session,
+                case,
+                "message.send_deferred",
+                {"message_id": message.id, "run_after": run_after.isoformat()},
+                now,
+            )
+            return
         if live and (settings.dry_run or not settings.outbound_mail_enabled):
             message.status = "dry_run"
             record_event(session, case, "message.dry_run", {"message_id": message.id}, now)
             return
         message.status = "sending"
+        message.sent_or_received_at = now
         record_event(session, case, "message.send_requested", {"message_id": message.id}, now)
         outbound = Outbound(
             message_id=message.external_message_id,

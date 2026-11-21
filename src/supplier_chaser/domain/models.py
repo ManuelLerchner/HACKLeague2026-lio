@@ -122,6 +122,7 @@ class Claim(Value):
     received_at: AwareDatetime
     source_kind: Literal["file", "message"]
     confirmation: Confirmation
+    baseline_terms_verified: bool = False
 
 
 class Discrepancy(Value):

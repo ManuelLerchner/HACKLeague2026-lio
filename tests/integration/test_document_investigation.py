@@ -223,3 +223,118 @@ def test_unique_material_items_create_individual_claims_and_only_late_case(
         assert set(session.scalars(select(CaseRow.issue_type))) == {"LATE_COMMITMENT"}
         assert session.scalar(select(func.count()).select_from(MessageRow)) == 1
         assert set(session.scalars(select(MessageRow.status))) == {"draft"}
+
+
+def test_failed_draft_preserves_analysis_and_retry_reuses_validated_extraction(
+    settings, factory, clock
+):
+    from supplier_chaser.agent.discover import request_document_investigation
+
+    class CountingModel(FixtureLLM):
+        calls = 0
+
+        def extract_document(self, text):
+            self.calls += 1
+            return super().extract_document(text)
+
+        def draft_supplier_question(self, *args):
+            raise ValueError("Synthetic invalid draft")
+
+    settings.llm_provider = "openai"
+    settings.auto_investigate_documents = True
+    model = CountingModel()
+    with factory.begin() as session:
+        source_id = seed_document(session, clock.now())
+        first = request_document_investigation(session, source_id, clock.now())
+        run_investigation(session, settings, clock, model, source_id)
+        assert analysis(session).normalized_json["status"] == "ambiguous"
+        assert session.scalar(select(func.count()).select_from(MessageRow)) == 0
+        assert model.calls == 1
+        first.status = "succeeded"
+        retry = request_document_investigation(session, source_id, clock.now(), retry=True)
+        assert retry.id != first.id
+        assert (
+            request_document_investigation(session, source_id, clock.now(), retry=True).id
+            == retry.id
+        )
+        run_investigation(session, settings, clock, model, source_id)
+        assert model.calls == 1
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(SourceFact)
+                .where(SourceFact.fact_type == "document_analysis")
+            )
+            == 2
+        )
+
+
+def test_held_inbound_reply_prevents_automatic_document_draft(settings, factory, clock):
+    settings.llm_provider = "openai"
+    settings.auto_investigate_documents = True
+    model = FixtureLLM()
+    with factory.begin() as session:
+        source_id = seed_document(session, clock.now())
+        for po in session.scalars(select(PORow)):
+            reconcile_line(session, po.id, settings, clock.now())
+        case = session.scalar(select(CaseRow))
+        session.add(
+            MessageRow(
+                case_id=case.id,
+                external_message_id="held@example.test",
+                direction="inbound",
+                sender="supplier@example.test",
+                recipients=["buyer@example.test"],
+                subject="Confirmation",
+                body="Please clarify",
+                status="needs_review",
+                sent_or_received_at=clock.now(),
+                metadata_json={},
+            )
+        )
+        session.flush()
+        run_investigation(session, settings, clock, model, source_id)
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(MessageRow)
+                .where(MessageRow.case_id == case.id, MessageRow.direction == "outbound")
+            )
+            == 0
+        )
+
+
+def test_failed_extraction_can_be_explicitly_retried_without_losing_history(
+    settings, factory, clock
+):
+    from supplier_chaser.agent.discover import request_document_investigation
+
+    class RecoveringModel(FixtureLLM):
+        calls = 0
+
+        def extract_document(self, text):
+            self.calls += 1
+            if self.calls <= 2:
+                raise ValueError("Synthetic extraction failure")
+            return super().extract_document(text)
+
+    settings.llm_provider = "openai"
+    model = RecoveringModel()
+    with factory.begin() as session:
+        source_id = seed_document(session, clock.now())
+        job = request_document_investigation(session, source_id, clock.now())
+        run_investigation(session, settings, clock, model, source_id)
+        assert analysis(session).normalized_json["status"] == "error"
+        job.status = "succeeded"
+        request_document_investigation(session, source_id, clock.now(), retry=True)
+        run_investigation(session, settings, clock, model, source_id)
+        statuses = list(
+            session.scalars(
+                select(SourceFact).where(
+                    SourceFact.source_file_id == source_id,
+                    SourceFact.fact_type == "document_analysis",
+                )
+            )
+        )
+        assert sorted(fact.normalized_json["status"] for fact in statuses) == ["ambiguous", "error"]
+        assert model.calls == 3

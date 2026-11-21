@@ -68,6 +68,28 @@ def receive(
     case = session.scalar(select(CaseRow).where(CaseRow.id == candidate).with_for_update())
     assert case is not None
     record_event(session, case, "message.received", {"message_id": row.id}, now)
+    stale_drafts = list(
+        session.scalars(
+            select(MessageRow).where(
+                MessageRow.case_id == case.id,
+                MessageRow.direction == "outbound",
+                MessageRow.status == "draft",
+            )
+        )
+    )
+    for draft in stale_drafts:
+        draft.status = "superseded"
+    if stale_drafts:
+        record_event(
+            session,
+            case,
+            "message.drafts_superseded",
+            {
+                "message_ids": [draft.id for draft in stale_drafts],
+                "reason": "Supplier reply received; review it before another inquiry",
+            },
+            now,
+        )
     if not message.identity_verified:
         row.status = "needs_review"
         if case.active_key is not None:

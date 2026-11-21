@@ -1,0 +1,28 @@
+{% set claim = case.assessment.latest_claim %}
+{% if claim and not case.held_reply and (not claim.confirmation.unit or claim.confirmation.terms) %}
+<section class="panel actions" id="claim-review">
+<h2>Verify existing commitment evidence</h2>
+<p>Use independent source evidence to establish a missing quantity unit or verify that stated terms already match the agreement. This does not approve revised terms, spending, shipping or release.</p>
+{% if claim.confirmation.risks %}<p>Recorded risks still require escalation: {{ claim.confirmation.risks | join(', ') }}. This review cannot clear them.</p>{% endif %}
+<form data-claim-review="{{ claim.id }}">
+<label>Your name<input name="reviewer" required minlength="2" maxlength="100"></label>
+<label>Review note<textarea name="note" required minlength="10" maxlength="2000" placeholder="Explain the source evidence and the comparison you made."></textarea></label>
+<label>Find supporting evidence by filename<input name="evidence_search" placeholder="Contract or purchase-order filename"></label>
+<button class="secondary" type="button" data-find-review-evidence>Find source references</button>
+<p><a href="/sources" target="_blank" rel="noopener">Open source review to inspect and copy evidence quotes ↗</a></p>
+{% if not claim.confirmation.unit %}
+<label>Quantity unit supported by evidence<input name="unit" placeholder="Leave blank unless established by evidence"></label>
+<label>Unit evidence source<select name="unit_fact"><option value="">Choose supporting source after searching</option></select></label>
+<label>Exact quote establishing the unit<textarea name="unit_quote"></textarea></label>
+{% endif %}
+{% if claim.confirmation.terms %}
+<p><strong>Supplier terms:</strong> {{ claim.confirmation.terms }}</p>
+<label>Independent existing agreement<select name="terms_fact"><option value="">Choose supporting source after searching</option></select></label>
+<label>Exact baseline quote supporting these terms<textarea name="terms_quote"></textarea></label>
+<label><input name="baseline_confirmed" type="checkbox"> I checked that these are existing agreed terms, not a proposed change or a new release condition.</label>
+{% endif %}
+<button type="submit">Record evidence review and recheck commitment</button>
+<p data-review-result role="status"></p>
+</form>
+</section>
+{% endif %}

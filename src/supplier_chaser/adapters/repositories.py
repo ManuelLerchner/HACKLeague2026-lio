@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from supplier_chaser.adapters.db import ClaimRow, PORow
+from supplier_chaser.adapters.db import ClaimRow, PORow, SourceFact
 from supplier_chaser.domain.models import Claim, Confirmation, POLine
 
 
@@ -24,6 +24,17 @@ class CommitmentRepository:
                 received_at=r.received_at,
                 source_kind="file" if r.source_fact_id else "message",
                 confirmation=Confirmation.model_validate(r.data),
+                baseline_terms_verified=self._baseline_verified(r),
             )
             for r in rows
         ]
+
+    def _baseline_verified(self, row: ClaimRow) -> bool:
+        fact = self.session.get(SourceFact, row.source_fact_id) if row.source_fact_id else None
+        return bool(
+            fact
+            and fact.fact_type == "reviewed_confirmation"
+            and fact.normalized_json.get("baseline_terms_verified")
+            and fact.normalized_json.get("authenticated_by")
+            and fact.normalized_json.get("confirmation") == row.data
+        )

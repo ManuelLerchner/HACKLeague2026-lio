@@ -128,3 +128,21 @@ def test_canonical_same_file_po_facts_supply_full_context(factory, clock):
         expanded, missing = all_order_lines(session, [po])
         assert missing == set()
         assert len(expanded) == 2
+
+
+def test_unrelated_invalid_return_does_not_poison_order_coverage(factory, clock):
+    with factory.begin() as session:
+        po, source = setup_pool(session, clock.now())
+        table = session.scalar(
+            select(SourceFact).where(
+                SourceFact.source_file_id == source.id, SourceFact.fact_type == "table"
+            )
+        )
+        data = dict(table.normalized_json)
+        rows = [dict(row) for row in data["rows"]]
+        rows[-1] = {**rows[-1], "values": {**rows[-1]["values"], "ordered_qty": "-23000"}}
+        table.normalized_json = {**data, "rows": rows}
+        session.flush()
+        expanded, missing = all_order_lines(session, [po])
+        assert not missing
+        assert {item.key for item in expanded} == {"TEST-ORDER/1", "TEST-ORDER/2"}

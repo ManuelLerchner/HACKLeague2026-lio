@@ -223,17 +223,10 @@ def register_source_routes(
             )
             if document is None:
                 raise HTTPException(409, "This source is no longer the current document version")
-            job = enqueue(
-                session,
-                "investigate_document",
-                {
-                    "source_file_id": fact.source_file_id,
-                    "projection_hash": document[3],
-                    "po_line_ids": [row.id for row in document[2]],
-                    "requested_by": admin,
-                },
-                f"investigate-document:{fact.source_file_id}:{document[3]}",
-                clock.now(),
+            from supplier_chaser.agent.discover import request_document_investigation
+
+            job = request_document_investigation(
+                session, fact.source_file_id, clock.now(), retry=True
             )
             return {"job_id": job.id, "status": job.status}
 

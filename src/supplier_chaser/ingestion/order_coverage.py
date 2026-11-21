@@ -18,7 +18,7 @@ def all_order_lines(session: Session, orders: list[POLine]) -> tuple[list[POLine
     missing: set[str] = set()
     wanted = {(po.po_number, po.supplier_id) for po in orders}
     failures: set[tuple[str, str]] = set()
-    pools: dict[tuple[str, str], list[POLine] | None] = {}
+    pools: dict[tuple[str, str, str], list[POLine] | None] = {}
     for po in orders:
         group = (po.po_number, po.supplier_id)
         row = session.get(PORow, po.key)
@@ -26,7 +26,7 @@ def all_order_lines(session: Session, orders: list[POLine]) -> tuple[list[POLine
         if origin is None or origin.fact_type != "po":
             failures.add(group)
             continue
-        key = (origin.source_file_id, origin.record_locator)
+        key = (origin.source_file_id, po.po_number, po.supplier_id)
         if key not in pools:
             facts = list(
                 session.scalars(
@@ -60,7 +60,16 @@ def all_order_lines(session: Session, orders: list[POLine]) -> tuple[list[POLine
                     spec = MappingSpec.model_validate(approval.normalized_json["definition"])
                     if spec.kind != "po":
                         raise ValueError("Order mapping required")
-                    spec = spec.model_copy(update={"filters": {}})
+                    filters = {
+                        spec.columns[field]: [value]
+                        for field, value in {
+                            "po_number": po.po_number,
+                            "supplier_id": po.supplier_id,
+                        }.items()
+                        if field in spec.columns
+                    }
+                    # Include closed siblings, while unrelated returns cannot invalidate this PO.
+                    spec = spec.model_copy(update={"filters": filters})
                     records = mapped_records(table.normalized_json, spec)
                     pool = [POLine.model_validate(data) for _, data in records]
                 else:

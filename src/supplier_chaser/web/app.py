@@ -35,9 +35,12 @@ from supplier_chaser.cases.service import move, record_event
 from supplier_chaser.clock import Clock, SystemClock
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.models import State
+from supplier_chaser.web.document_reviews import register_document_review_routes
 from supplier_chaser.web.evidence import preview_file
+from supplier_chaser.web.job_retries import register_retry_routes
 from supplier_chaser.web.sources import register_source_routes
 from supplier_chaser.workflow.jobs import enqueue
+from supplier_chaser.workflow.retry import RETRYABLE_JOB_TYPES
 
 ROOT = Path(__file__).parent
 
@@ -83,6 +86,7 @@ def serialize_case(session: Session, case: CaseRow, findings: list[dict] | None 
             select(JobRow).where(JobRow.status.in_(["queued", "running", "failed"]))
         )
         if j.payload_json["payload"].get("case_id") == case.id
+        or j.payload_json["payload"].get("po_line_id") == case.po_line_id
     ]
     pending = any(j.status in {"queued", "running"} for j in jobs) or any(
         item["status"] == "pending" for item in findings
@@ -92,16 +96,18 @@ def serialize_case(session: Session, case: CaseRow, findings: list[dict] | None 
         .where(
             MessageRow.case_id == case.id,
             MessageRow.direction == "inbound",
-            MessageRow.status == "needs_review",
+            MessageRow.status.in_(["needs_review", "review_queued"]),
         )
         .limit(1)
     )
     if case.state in {State.RESOLVED, State.CANCELLED}:
         group, action = "Completed", "View evidence"
-    elif pending or any(item["status"] == "pending" for item in findings):
-        group, action = "In progress", "Worker action queued"
-    elif held:
+    elif held and not any(
+        j.job_type == "review_reply" and j.status in {"queued", "running"} for j in jobs
+    ):
         group, action = "Needs your action", "Review supplier reply"
+    elif pending:
+        group, action = "In progress", "Worker action queued"
     elif any(j.status == "failed" for j in jobs) or any(
         item["status"] == "error" for item in findings
     ):
@@ -124,6 +130,7 @@ def serialize_case(session: Session, case: CaseRow, findings: list[dict] | None 
         "action_group": group,
         "next_action": action,
         "pending_work": pending,
+        "held_reply": bool(held),
         "jobs": [{"type": j.job_type, "status": j.status, "error": j.last_error} for j in jobs],
         "id": case.id,
         "state": case.state,
@@ -321,6 +328,15 @@ def create_app(
                     "at": m.sent_or_received_at,
                     "extraction": m.metadata_json.get("extraction"),
                     "review": m.metadata_json.get("buyer_review"),
+                    "block_reasons": m.metadata_json.get("block_reasons", []),
+                    "retry_after": m.metadata_json.get("scheduled_send_at"),
+                    "can_retry_send": (
+                        m.status == "blocked"
+                        and len(m.metadata_json.get("block_reasons", [])) == 1
+                        and m.metadata_json["block_reasons"][0].startswith(
+                            "Supplier send limit reached"
+                        )
+                    ),
                 }
                 for m in messages
             ]
@@ -488,6 +504,18 @@ def create_app(
     def approve(case_id: str, edit: DraftEdit, admin: str = Depends(authorized)) -> dict:
         with factory.begin() as session:
             case = get_case(session, case_id, lock=True)
+            if session.scalar(
+                select(MessageRow.id)
+                .where(
+                    MessageRow.case_id == case.id,
+                    MessageRow.direction == "inbound",
+                    MessageRow.status.in_(["needs_review", "review_queued"]),
+                )
+                .limit(1)
+            ):
+                raise HTTPException(
+                    409, "Review the received supplier reply before sending another inquiry"
+                )
             if case.state not in {State.DRAFT_READY, State.NEEDS_APPROVAL}:
                 raise HTTPException(409, "Case is not awaiting send approval")
             message = session.scalar(
@@ -654,7 +682,12 @@ def create_app(
                     fact = session.get(SourceFact, payload["source_fact_id"])
                     source_id = fact.source_file_id if fact else None
                 queue_jobs.append(
-                    {"job": job, "source_id": source_id, "case_id": payload.get("case_id")}
+                    {
+                        "job": job,
+                        "source_id": source_id,
+                        "case_id": payload.get("case_id"),
+                        "retryable": job.status == "failed" and job.job_type in RETRYABLE_JOB_TYPES,
+                    }
                 )
             template = (
                 "queue_summary.html"
@@ -693,5 +726,7 @@ def create_app(
                 },
             )
 
+    register_retry_routes(app, factory, clock, authorized)
+    register_document_review_routes(app, factory, clock, authorized, templates, status)
     register_source_routes(app, factory, settings, clock, authorized, templates, status)
     return app

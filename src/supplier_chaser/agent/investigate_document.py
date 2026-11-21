@@ -4,10 +4,14 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from supplier_chaser.adapters.db import CaseRow, SourceFact, SourceFile, SupplierRow
+from supplier_chaser.adapters.db import CaseRow, MessageRow, SourceFact, SourceFile, SupplierRow
 from supplier_chaser.agent.discover import relevant_documents
 from supplier_chaser.agent.draft import create_draft
-from supplier_chaser.agent.interpret_reply import source_quote, supports_date
+from supplier_chaser.agent.interpret_reply import (
+    source_quote,
+    supports_date,
+    validate_quantity_unit,
+)
 from supplier_chaser.cases.service import move, reconcile_line
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.documents import DocumentItems
@@ -17,6 +21,30 @@ from supplier_chaser.ingestion.order_coverage import all_order_lines
 from supplier_chaser.ingestion.poll import save_claim
 from supplier_chaser.ports.llm import LLMDrafter, LLMExtractor
 from supplier_chaser.workflow.events import append_event
+
+
+def validate_document(document: DocumentItems, text: str, orders: list[POLine]) -> DocumentItems:
+    if (document.po_number, document.supplier_id) not in {
+        (po.po_number, po.supplier_id) for po in orders
+    }:
+        raise ValueError("Document attribution differs from candidate orders")
+    items = []
+    for item in document.items:
+        quote = source_quote(text, item.evidence_quote)
+        if item.part_number not in quote:
+            raise ValueError("Item quote lacks the material identifier")
+        # Use the same deterministic quantity/date validation as reply extraction.
+        from supplier_chaser.agent.interpret_reply import quantities_in_quote
+
+        if item.quantity not in quantities_in_quote(quote):
+            raise ValueError("Item quantity lacks evidence")
+        if item.promised_date and not supports_date(quote, item.promised_date):
+            raise ValueError("Item date lacks evidence")
+        if item.item_reference and item.item_reference not in quote:
+            raise ValueError("Item reference lacks evidence")
+        validate_quantity_unit(item.unit, quote)
+        items.append(item.model_copy(update={"evidence_quote": quote}))
+    return document.model_copy(update={"items": items, "complete_order_lines": False})
 
 
 def validated_document(extractor: LLMExtractor, text: str, orders: list[POLine]) -> DocumentItems:
@@ -31,26 +59,7 @@ def validated_document(extractor: LLMExtractor, text: str, orders: list[POLine])
                 + "\nOriginal document:\n"
                 + text
             ).model_copy(update={"complete_order_lines": False})
-            if (document.po_number, document.supplier_id) not in {
-                (po.po_number, po.supplier_id) for po in orders
-            }:
-                raise ValueError("Document attribution differs from candidate orders")
-            items = []
-            for item in document.items:
-                quote = source_quote(text, item.evidence_quote)
-                if item.part_number not in quote:
-                    raise ValueError("Item quote lacks the material identifier")
-                # Use the same deterministic quantity/date validation as reply extraction.
-                from supplier_chaser.agent.interpret_reply import quantities_in_quote
-
-                if item.quantity not in quantities_in_quote(quote):
-                    raise ValueError("Item quantity lacks evidence")
-                if item.promised_date and not supports_date(quote, item.promised_date):
-                    raise ValueError("Item date lacks evidence")
-                if item.item_reference and item.item_reference not in quote:
-                    raise ValueError("Item reference lacks evidence")
-                items.append(item.model_copy(update={"evidence_quote": quote}))
-            return document.model_copy(update={"items": items})
+            return validate_document(document, text, orders)
         except (ValueError, TypeError):
             if attempt:
                 raise
@@ -90,13 +99,46 @@ def investigate_document(
         return
     _, text, rows, _ = current
     orders = [POLine.model_validate(row.data) for row in rows]
+    reviewed_lines = {
+        finding["po_line_id"]
+        for review in session.scalars(
+            select(SourceFact).where(
+                SourceFact.source_file_id == source.id, SourceFact.fact_type == "document_review"
+            )
+        )
+        for finding in review.normalized_json.get("line_findings", [])
+    }
     result: dict = {
         "status": "error",
         "summary": "Document extraction could not be validated; no supplier claim was accepted.",
         "line_findings": [],
     }
     try:
-        document = validated_document(extractor, text, orders)
+        document = None
+        cached = session.scalars(
+            select(SourceFact)
+            .where(
+                SourceFact.source_file_id == source.id,
+                SourceFact.fact_type == "document_analysis",
+            )
+            .order_by(SourceFact.extracted_at.desc(), SourceFact.id)
+        )
+        for previous in cached:
+            if previous.normalized_json.get("status") not in {
+                "complete",
+                "ambiguous",
+                "unsupported",
+            }:
+                continue
+            try:
+                candidate = DocumentItems.model_validate(previous.normalized_json["document"])
+                document = validate_document(candidate, text, orders)
+                result["extraction_reused_from"] = previous.id
+                break
+            except (ValueError, TypeError, KeyError):
+                continue
+        if document is None:
+            document = validated_document(extractor, text, orders)
         result["document"] = document.model_dump(mode="json")
         if document.document_type != "confirmation":
             result.update(
@@ -158,7 +200,7 @@ def investigate_document(
                     f"date {item.promised_date or 'unknown'}."
                     for item in candidates
                 )
-                if attribution.status == "matched":
+                if attribution.status == "matched" and po.key not in reviewed_lines:
                     item = items[attribution.item_ids[0]]
                     supplier = session.get(SupplierRow, po.supplier_id)
                     supplier_fact = (
@@ -242,12 +284,43 @@ def investigate_document(
                 )
             )
             for case in cases:
-                if case.state in {State.NEW, State.ESCALATED}:
-                    move(
-                        session,
-                        case,
-                        State.INVESTIGATING,
-                        now,
-                        "Prepare factual clarification from existing document evidence",
+                held_reply = session.scalar(
+                    select(MessageRow.id)
+                    .where(
+                        MessageRow.case_id == case.id,
+                        MessageRow.direction == "inbound",
+                        MessageRow.status.in_(["needs_review", "review_queued"]),
                     )
-                    create_draft(session, case.id, drafter, settings, now, require_approval=True)
+                    .limit(1)
+                )
+                if held_reply:
+                    continue
+                if case.state in {State.NEW, State.ESCALATED}:
+                    try:
+                        with session.begin_nested():
+                            move(
+                                session,
+                                case,
+                                State.INVESTIGATING,
+                                now,
+                                "Prepare factual clarification from existing document evidence",
+                            )
+                            create_draft(
+                                session, case.id, drafter, settings, now, require_approval=True
+                            )
+                    except Exception:
+                        # Draft generation cannot discard validated source analysis and claims.
+                        move(
+                            session,
+                            case,
+                            State.ESCALATED,
+                            now,
+                            "Document investigated; draft failed. Request a new draft.",
+                        )
+                        append_event(
+                            session,
+                            case.id,
+                            "message.draft_failed",
+                            {"reason": "Draft generation failed; source analysis is preserved."},
+                            now,
+                        )

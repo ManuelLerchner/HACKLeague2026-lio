@@ -78,7 +78,7 @@ def reconcile(
         or confirmation.unit != po.unit
         or any(d.day is None for d in confirmation.deliveries)
         or confirmation.risks
-        or bool(confirmation.terms.strip())
+        or (bool(confirmation.terms.strip()) and not latest.baseline_terms_verified)
     ):
         return Assessment(
             status="UNKNOWN",
