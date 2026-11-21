@@ -12,7 +12,7 @@ from supplier_chaser.adapters.db import JobRow, PORow, SourceFact, SourceFile, u
 from supplier_chaser.config import Settings
 from supplier_chaser.workflow.jobs import enqueue
 
-INVESTIGATION_VERSION = "document-investigation-v2"
+INVESTIGATION_VERSION = "document-investigation-v3"
 
 
 def mentions(text: str, identifier: str) -> bool:

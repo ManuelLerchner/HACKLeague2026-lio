@@ -18,6 +18,7 @@ from supplier_chaser.config import Settings
 from supplier_chaser.domain.documents import DocumentItems
 from supplier_chaser.domain.models import Confirmation, Delivery, POLine, State
 from supplier_chaser.ingestion.attribution import attribute_items
+from supplier_chaser.ingestion.item_numbering import learned_reference_map
 from supplier_chaser.ingestion.order_coverage import all_order_lines
 from supplier_chaser.ingestion.poll import save_claim
 from supplier_chaser.ports.llm import LLMDrafter, LLMExtractor
@@ -150,7 +151,14 @@ def investigate_document(
             matching_context, incomplete = all_order_lines(session, orders)
             attributions = [
                 attribution
-                for attribution in attribute_items(document, matching_context)
+                for attribution in attribute_items(
+                    document,
+                    matching_context,
+                    item_reference_map=learned_reference_map(
+                        session, document, source.id, matching_context
+                    ),
+                    reference_method="learned_reference",
+                )
                 if attribution.po_line_id in {po.key for po in orders}
             ]
             attributions = [

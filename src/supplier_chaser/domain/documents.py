@@ -43,5 +43,7 @@ class LineAttribution(Value):
     item_ids: list[str] = []
     candidate_item_ids: list[str] = []
     proposed_item_ids: list[str] = []
-    method: Literal["reviewed_reference", "unique_material", "equivalent_group", "none"]
+    method: Literal[
+        "reviewed_reference", "learned_reference", "unique_material", "equivalent_group", "none"
+    ]
     reason: str
