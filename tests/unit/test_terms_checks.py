@@ -142,3 +142,17 @@ def test_later_rejection_overrides_earlier_acceptance():
 
 def outcome_of(checks):
     return {c.name: (c.status, c.decision) for c in checks}
+
+
+def test_agreement_validity_from_expiry_wording_or_term_range():
+    from supplier_chaser.ingestion.references import validity
+
+    assert validity("PC-0010-2022 · Effective 2022-01-01 · Expires 2026-12-31") == (
+        date(2022, 1, 1),
+        date(2026, 12, 31),
+    )
+    assert validity("Contract no. PC-0019-2018 . 2018-03-01 — 2027-02-28") == (
+        date(2018, 3, 1),
+        date(2027, 2, 28),
+    )
+    assert validity("Supply agreement without dates") == (None, None)

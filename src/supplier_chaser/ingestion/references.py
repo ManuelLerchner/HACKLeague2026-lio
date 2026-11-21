@@ -14,6 +14,18 @@ from supplier_chaser.domain.terms import incoterms, payment_terms
 AGREEMENT_PATH = re.compile(r"/contracts?/|agreement|contract", re.IGNORECASE)
 EFFECTIVE = re.compile(r"effective(?:\s+from)?\s+(\d{4}-\d{2}-\d{2})", re.IGNORECASE)
 EXPIRES = re.compile(r"expires(?:\s+on)?\s+(\d{4}-\d{2}-\d{2})", re.IGNORECASE)
+# Some agreements state only their term, e.g. "Contract no. PC-0019-2018 . 2018-03-01 — 2027-02-28".
+TERM = re.compile(r"(\d{4}-\d{2}-\d{2})\s*[-\u2013\u2014]\s*(\d{4}-\d{2}-\d{2})")
+
+
+def validity(text: str) -> tuple[date | None, date | None]:
+    effective, expires, term = EFFECTIVE.search(text), EXPIRES.search(text), TERM.search(text)
+    start = effective.group(1) if effective else term.group(1) if term else None
+    end = expires.group(1) if expires else term.group(2) if term else None
+    return (
+        date.fromisoformat(start) if start else None,
+        date.fromisoformat(end) if end else None,
+    )
 
 
 def _key(name: str) -> str:
@@ -68,12 +80,12 @@ def agreement(session: Session, root: str) -> Agreement | None:
         text = "\n".join(page for _, page in sorted(pages))
         if not text.strip():
             continue
-        effective, expires = EFFECTIVE.search(text), EXPIRES.search(text)
+        effective, expires = validity(text)
         found.append(
             Agreement(
                 path=path,
-                effective=date.fromisoformat(effective.group(1)) if effective else None,
-                expires=date.fromisoformat(expires.group(1)) if expires else None,
+                effective=effective,
+                expires=expires,
                 incoterms=incoterms(text),
                 payment_terms=payment_terms(text),
             )
