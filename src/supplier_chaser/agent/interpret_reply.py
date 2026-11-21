@@ -98,7 +98,7 @@ def quantities_in_quote(quote: str) -> set[Decimal]:
 CURRENCY_CODES = frozenset("USD EUR GBP CHF PLN CNY RMB INR KRW JPY CAD AUD HKD SGD".split())
 
 
-def _mentions_unit(quote: str, word: str) -> bool:
+def mentions_unit(quote: str, word: str) -> bool:
     # CJK units attach directly to digits ("460,000件"), so word boundaries apply to Latin only.
     pattern = (
         re.escape(word) if not word.isascii() else r"(?<![a-z])" + re.escape(word) + r"(?![a-z])"
@@ -126,7 +126,7 @@ def validate_quantity_unit(unit: str | None, quote: str) -> str | None:
         unit,
     )
     words = UNIT_ALIASES.get(canonical, (unit,))
-    if not any(_mentions_unit(quote, word) for word in words):
+    if not any(mentions_unit(quote, word) for word in words):
         raise ValueError("Quantity unit lacks source evidence")
     return canonical
 

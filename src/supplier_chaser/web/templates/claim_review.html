@@ -1,28 +1,62 @@
-{% set claim = case.assessment.latest_claim %}
-{% if claim and not case.held_reply and (not claim.confirmation.unit or claim.confirmation.terms) %}
+{% set review = case.claim_review %}
+{% if review and not case.held_reply and (review.terms or review.unit_missing or review.acknowledgeable or review.blocking) %}
 <section class="panel actions" id="claim-review">
-<h2>Verify existing commitment evidence</h2>
-<p>Use independent source evidence to establish a missing quantity unit or verify that stated terms already match the agreement. This does not approve revised terms, spending, shipping or release.</p>
-{% if claim.confirmation.risks %}<p>Recorded risks still require escalation: {{ claim.confirmation.risks | join(', ') }}. This review cannot clear them.</p>{% endif %}
-<form data-claim-review="{{ claim.id }}">
-<label>Your name<input name="reviewer" required minlength="2" maxlength="100"></label>
-<label>Review note<textarea name="note" required minlength="10" maxlength="2000" placeholder="Explain the source evidence and the comparison you made."></textarea></label>
-<label>Find supporting evidence by filename<input name="evidence_search" placeholder="Contract or purchase-order filename"></label>
+<h2>Settle the supplier's confirmation</h2>
+<p>The supplier's quantity and date are recorded. These points keep the case from resolving. This review never approves new costs, changed terms, shipping or release.</p>
+{% if review.blocking %}
+<div class="notice"><strong>Cannot be settled here. Waiting will not resolve this case.</strong>
+<ul>{% for risk, why in review.blocking.items() %}<li>{{ risk }}: {{ why }}</li>{% endfor %}</ul></div>
+{% endif %}
+{% if review.terms or review.unit_missing or review.acknowledgeable %}
+<form data-claim-review="{{ review.claim_id }}">
+{% if review.terms %}
+<fieldset><legend>1 · Are the stated terms the existing agreement?</legend>
+<p>Supplier states: “{{ review.terms }}”</p>
+{% if review.terms_unverifiable %}
+<p>These terms include commercial conditions (fees, prices, deposits or release). They cannot be confirmed as existing terms here; escalate them to an authorized buyer.</p>
+{% elif review.suggestion %}
+<p>{{ 'Found in the supplier agreement' if review.suggestion.agreement else 'Found only in an earlier supplier document, not the agreement. Check it carefully' }}: <a href="/evidence/{{ review.suggestion.fact_id }}/preview" data-preview-url="/evidence/{{ review.suggestion.fact_id }}/preview" data-preview-title="{{ review.suggestion.path }}">{{ review.suggestion.path }}</a> states {{ review.suggestion.conditions | join(', ') }}.</p>
+<input type="hidden" name="terms_fact" value="{{ review.suggestion.fact_id }}">
+<label>Matching passage (verbatim from that file)<textarea name="terms_quote" rows="3">{{ review.suggestion.quote }}</textarea></label>
+<label><input name="baseline_confirmed" type="checkbox"> I compared them: the supplier repeats existing agreed terms, not a proposed change.</label>
+{% else %}
+<p>No file of this supplier states these conditions. Search for the agreement manually below, or treat the terms as a proposed change and escalate.</p>
+<label>Supporting agreement<select name="terms_fact"><option value="">Choose a source after searching</option></select></label>
+<label>Exact passage from that agreement<textarea name="terms_quote"></textarea></label>
+<label><input name="baseline_confirmed" type="checkbox"> I compared them: the supplier repeats existing agreed terms, not a proposed change.</label>
+{% endif %}
+</fieldset>
+{% endif %}
+{% if review.acknowledgeable %}
+<fieldset><legend>{{ '2' if review.terms else '1' }} · Flags raised on the supplier's wording</legend>
+{% for risk, why in review.acknowledgeable.items() %}<label><input name="acknowledge" type="checkbox" value="{{ risk }}"> Acknowledge “{{ risk }}”: {{ why }} I read it and it does not change the order.</label>{% endfor %}
+<p class="muted">Say in the note what the wording was and why it is harmless.</p>
+</fieldset>
+{% endif %}
+{% if review.unit_missing %}
+<fieldset><legend>The supplier states no quantity unit</legend>
+{% set unit = review.unit_suggestion %}
+{% if unit %}
+<p>{% if unit.from_order %}No supplier file names the unit. Our order <a href="/evidence/{{ unit.fact_id }}/preview">{{ unit.path }}</a> is in {{ unit.unit }}; accept it only if the supplier's quantity clearly refers to that unit.{% else %}<a href="/evidence/{{ unit.fact_id }}/preview">{{ unit.path }}</a> names this material in {{ unit.unit }}.{% endif %}</p>
+<input type="hidden" name="unit_fact" value="{{ unit.fact_id }}">
+<label><input name="unit" type="checkbox" value="{{ unit.unit }}"> The supplier's quantity is in {{ unit.unit }}.</label>
+<label>Supporting passage<textarea name="unit_quote" rows="2">{{ unit.quote }}</textarea></label>
+{% else %}
+<label>Unit<input name="unit" placeholder="e.g. PC; leave blank unless evidenced"></label>
+<label>Unit evidence source<select name="unit_fact"><option value="">Choose a source after searching</option></select></label>
+<label>Exact passage naming the material and unit<textarea name="unit_quote"></textarea></label>
+{% endif %}
+</fieldset>
+{% endif %}
+{% if (review.unit_missing and not review.unit_suggestion) or (review.terms and not review.suggestion and not review.terms_unverifiable) %}
+<label>Find supporting files by name<input name="evidence_search" placeholder="contract, agreement or filename"></label>
 <button class="secondary" type="button" data-find-review-evidence>Find source references</button>
-<p><a href="/sources" target="_blank" rel="noopener">Open source review to inspect and copy evidence quotes ↗</a></p>
-{% if not claim.confirmation.unit %}
-<label>Quantity unit supported by evidence<input name="unit" placeholder="Leave blank unless established by evidence"></label>
-<label>Unit evidence source<select name="unit_fact"><option value="">Choose supporting source after searching</option></select></label>
-<label>Exact quote establishing the unit<textarea name="unit_quote"></textarea></label>
 {% endif %}
-{% if claim.confirmation.terms %}
-<p><strong>Supplier terms:</strong> {{ claim.confirmation.terms }}</p>
-<label>Independent existing agreement<select name="terms_fact"><option value="">Choose supporting source after searching</option></select></label>
-<label>Exact baseline quote supporting these terms<textarea name="terms_quote"></textarea></label>
-<label><input name="baseline_confirmed" type="checkbox"> I checked that these are existing agreed terms, not a proposed change or a new release condition.</label>
-{% endif %}
-<button type="submit">Record evidence review and recheck commitment</button>
+<label>Your name<input name="reviewer" required minlength="2" maxlength="100" data-remember-reviewer></label>
+<label>Review note<textarea name="note" required minlength="10" maxlength="2000">{% if review.suggestion %}Stated terms ({{ review.suggestion.conditions | join(', ') }}) match {{ review.suggestion.path }}. {% endif %}{% if review.unit_suggestion %}Unit {{ review.unit_suggestion.unit }} per {{ 'our order; supplier gives no unit' if review.unit_suggestion.from_order else review.unit_suggestion.path }}.{% endif %}</textarea></label>
+<button type="submit">Record review and recheck commitment</button>
 <p data-review-result role="status"></p>
 </form>
+{% endif %}
 </section>
 {% endif %}

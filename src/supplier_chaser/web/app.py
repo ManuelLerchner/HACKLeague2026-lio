@@ -35,6 +35,7 @@ from supplier_chaser.cases.service import move, record_event
 from supplier_chaser.clock import Clock, SystemClock
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.models import State
+from supplier_chaser.ingestion.document_review import claim_review_context
 from supplier_chaser.web.document_reviews import register_document_review_routes
 from supplier_chaser.web.evidence import preview_file
 from supplier_chaser.web.job_retries import register_retry_routes
@@ -311,6 +312,8 @@ def create_app(
         with factory() as session:
             case = get_case(session, case_id)
             result = serialize_case(session, case)
+            latest = (case.evidence_summary or {}).get("latest_claim")
+            result["claim_review"] = claim_review_context(session, latest) if latest else None
             messages = session.scalars(
                 select(MessageRow)
                 .where(MessageRow.case_id == case.id)

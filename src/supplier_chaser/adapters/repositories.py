@@ -24,17 +24,22 @@ class CommitmentRepository:
                 received_at=r.received_at,
                 source_kind="file" if r.source_fact_id else "message",
                 confirmation=Confirmation.model_validate(r.data),
-                baseline_terms_verified=self._baseline_verified(r),
+                **self._buyer_review(r),
             )
             for r in rows
         ]
 
-    def _baseline_verified(self, row: ClaimRow) -> bool:
+    def _buyer_review(self, row: ClaimRow) -> dict:
+        """Review outcomes count only for the exact confirmation an authenticated buyer saw."""
         fact = self.session.get(SourceFact, row.source_fact_id) if row.source_fact_id else None
-        return bool(
+        if not (
             fact
             and fact.fact_type == "reviewed_confirmation"
-            and fact.normalized_json.get("baseline_terms_verified")
             and fact.normalized_json.get("authenticated_by")
             and fact.normalized_json.get("confirmation") == row.data
-        )
+        ):
+            return {}
+        return {
+            "baseline_terms_verified": bool(fact.normalized_json.get("baseline_terms_verified")),
+            "acknowledged_risks": fact.normalized_json.get("acknowledged_risks", []),
+        }

@@ -200,3 +200,145 @@ def test_review_routes_are_served_behind_session_and_csrf(settings, factory, clo
         no_evidence = {"reviewer": "Buyer", "note": "No supporting evidence given."}
         assert client.post(f"/api/v1/claims/{claim_id}/review", json=no_evidence).status_code == 422
         assert client.post("/api/v1/claims/missing/review", json=no_evidence).status_code == 404
+
+
+def add_contract(session, now, text="§ 4 Deliveries are made FOB Busan (Incoterms 2020)."):
+    source = SourceFile(
+        path="suppliers/synthetic/contracts/framework.pdf",
+        checksum="framework",
+        media_type="application/pdf",
+        parse_status="parsed",
+        blob_ref="framework",
+        downloaded_at=now,
+    )
+    session.add(source)
+    session.flush()
+    fact = SourceFact(
+        source_file_id=source.id,
+        record_locator="page:1",
+        fact_type="text",
+        normalized_json={"text": text},
+        extracted_at=now,
+    )
+    session.add(fact)
+    session.flush()
+    return fact
+
+
+def reply_claim(session, now, risks):
+    from supplier_chaser.ingestion.poll import save_claim
+
+    confirmation = Confirmation(
+        document_id="reply-1",
+        po_number="TEST-ORDER",
+        line_number="2",
+        supplier_id="SUP-TEST",
+        unit="PC",
+        deliveries=[{"quantity": "2600", "promised_date": "2027-01-04"}],
+        intent="confirmed",
+        terms="Supply remains under the applicable agreement and the agreed FOB Busan terms",
+        risks=risks,
+    )
+    save_claim(session, confirmation, now)
+    session.flush()
+    return session.scalar(select(ClaimRow))
+
+
+def test_prefilled_baseline_and_acknowledged_flag_resolve_reply_claim(settings, factory, clock):
+    from supplier_chaser.ingestion.document_review import claim_review_context
+
+    with factory.begin() as session:
+        seed_document(session, clock.now())
+        contract = add_contract(session, clock.now())
+        claim = reply_claim(session, clock.now(), ["contract"])
+        repository = CommitmentRepository(session)
+        before = reconcile(
+            repository.get_po_line("TEST-ORDER/2"),
+            repository.get_claims("TEST-ORDER/2"),
+            clock.now(),
+        )
+        assert before.status == "UNKNOWN"
+        context = claim_review_context(session, before.latest_claim.model_dump(mode="json"))
+        suggestion = context["suggestion"]
+        assert suggestion["fact_id"] == contract.id
+        assert "FOB Busan" in suggestion["quote"]
+        assert list(context["acknowledgeable"]) == ["contract"] and not context["blocking"]
+        review = ClaimReview(
+            reviewer="Buyer",
+            note="Supplier restates the framework agreement; no change.",
+            baseline_terms_evidence=EvidenceReference(
+                fact_id=suggestion["fact_id"], quote=suggestion["quote"]
+            ),
+            acknowledged_risks=["contract"],
+        )
+        review_claim(session, claim.id, review, "admin", clock.now())
+        after = reconcile(
+            repository.get_po_line("TEST-ORDER/2"),
+            repository.get_claims("TEST-ORDER/2"),
+            clock.now(),
+        )
+        assert after.status == "MATCH"
+
+
+def test_fee_flag_cannot_be_acknowledged(settings, factory, clock):
+    from pydantic import ValidationError
+
+    from supplier_chaser.ingestion.document_review import claim_review_context
+
+    with factory.begin() as session:
+        seed_document(session, clock.now())
+        add_contract(session, clock.now())
+        claim = reply_claim(session, clock.now(), ["fee", "instructions"])
+        latest = CommitmentRepository(session).get_claims("TEST-ORDER/2")[0]
+        context = claim_review_context(session, latest.model_dump(mode="json"))
+        assert list(context["blocking"]) == ["fee"]
+        with pytest.raises(ValidationError):
+            ClaimReview(reviewer="Buyer", note="Fee is fine, trust me.", acknowledged_risks=["fee"])
+        not_recorded = ClaimReview(
+            reviewer="Buyer",
+            note="Acknowledging a flag that is absent.",
+            acknowledged_risks=["contract"],
+        )
+        with pytest.raises(ValueError, match="Not a recorded risk"):
+            review_claim(session, claim.id, not_recorded, "admin", clock.now())
+        review_claim(
+            session,
+            claim.id,
+            ClaimReview(
+                reviewer="Buyer",
+                note="Carrier note is informational.",
+                acknowledged_risks=["instructions"],
+            ),
+            "admin",
+            clock.now(),
+        )
+        repository = CommitmentRepository(session)
+        assert (
+            reconcile(
+                repository.get_po_line("TEST-ORDER/2"),
+                repository.get_claims("TEST-ORDER/2"),
+                clock.now(),
+            ).status
+            == "UNKNOWN"
+        )
+
+
+def test_missing_unit_prefills_from_order_and_validates(settings, factory, clock):
+    from supplier_chaser.ingestion.document_review import suggest_unit
+
+    with factory.begin() as session:
+        seed_document(session, clock.now())
+        claim = reply_claim(session, clock.now(), [])
+        suggestion = suggest_unit(session, "TEST-ORDER/2")
+        assert suggestion["unit"] == "PC"
+        review = ClaimReview(
+            reviewer="Buyer",
+            note="Supplier quantity matches our order in pieces.",
+            unit=suggestion["unit"],
+            unit_evidence=EvidenceReference(
+                fact_id=suggestion["fact_id"], quote=suggestion["quote"]
+            ),
+        )
+        original = Confirmation.model_validate(claim.data).model_copy(update={"unit": None})
+        confirmed, _ = reviewed_values(session, original, review, None)
+        assert confirmed.unit == "PC"

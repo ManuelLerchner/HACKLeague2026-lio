@@ -5,6 +5,7 @@ import json
 import re
 from datetime import datetime
 from pathlib import PurePosixPath
+from typing import Literal
 
 from pydantic import Field
 from sqlalchemy import select
@@ -18,7 +19,7 @@ from supplier_chaser.adapters.db import (
     SourceFile,
     SupplierRow,
 )
-from supplier_chaser.agent.interpret_reply import source_quote
+from supplier_chaser.agent.interpret_reply import UNIT_ALIASES, mentions_unit, source_quote
 from supplier_chaser.domain.documents import DocumentItems
 from supplier_chaser.domain.models import Confirmation, Delivery, Value
 from supplier_chaser.ingestion.poll import save_claim
@@ -36,6 +37,9 @@ class ClaimReview(Value):
     unit: str | None = None
     unit_evidence: EvidenceReference | None = None
     baseline_terms_evidence: EvidenceReference | None = None
+    # Fee, bank and identity flags need a decision outside this review; these two are
+    # interpretations of supplier wording that a buyer may judge harmless, with a reason.
+    acknowledged_risks: list[Literal["contract", "instructions"]] = []
 
 
 class ItemReview(ClaimReview):
@@ -56,6 +60,128 @@ def evidence_text(session: Session, reference: EvidenceReference) -> tuple[Sourc
         raise ValueError("Choose an original text, table, order or supplier evidence fact")
     text = fact.normalized_json.get("text") or json.dumps(fact.normalized_json, ensure_ascii=False)
     return fact, source_quote(text, reference.quote)
+
+
+INCOTERM = re.compile(r"\b(EXW|FCA|FAS|FOB|CFR|CIF|CPT|CIP|DAP|DPU|DDP)\s+([A-Z][\w-]*)")
+PAYMENT = re.compile(r"\bnet\s?(\d{1,3})\b|\b(\d{1,3})\s+days\s+net\b", re.IGNORECASE)
+# Commercial content beyond delivery and payment terms is never verified as a baseline.
+UNVERIFIABLE_TERMS = re.compile(
+    r"fee|surcharge|price|cost|charge|deposit|prepay|advance|bank|iban|release|penalt|%|increase",
+    re.IGNORECASE,
+)
+
+
+def stated_conditions(text: str) -> set[str]:
+    """Incoterm and payment conditions, normalised so wording and layout do not matter."""
+    conditions = {f"{code} {place.casefold()}" for code, place in INCOTERM.findall(text)}
+    conditions |= {f"NET{a or b}" for a, b in PAYMENT.findall(text)}
+    return conditions
+
+
+def baseline_mismatch(terms: str, quote: str) -> str | None:
+    if UNVERIFIABLE_TERMS.search(terms):
+        return "Stated terms include commercial conditions; treat them as a proposed change"
+    stated = stated_conditions(terms)
+    if stated:
+        missing = sorted(stated - stated_conditions(quote))
+        return f"Baseline quote does not state: {', '.join(missing)}" if missing else None
+    normalized = " ".join(quote.split()).casefold()
+    lines = [" ".join(t.split()).casefold() for t in terms.splitlines() if t.strip()]
+    if not lines or any(line not in normalized for line in lines):
+        return "Quote the existing baseline supporting every stated term"
+    return None
+
+
+def suggest_baseline(
+    session: Session, terms: str, supplier_id: str, claim_source_id: str | None
+) -> dict | None:
+    """Find a passage in the supplier's own files that states every stated condition."""
+    stated = stated_conditions(terms)
+    root = supplier_root(session, supplier_id)
+    if not stated or not root or UNVERIFIABLE_TERMS.search(terms):
+        return None
+    rows = list(
+        session.execute(
+            select(SourceFact, SourceFile.path)
+            .join(SourceFile)
+            .where(SourceFact.fact_type == "text", SourceFile.path.startswith(root + "/"))
+        ).all()
+    )
+    # Agreements outrank earlier confirmations, which merely repeat what a supplier said before.
+    rows.sort(key=lambda r: (not re.search(r"contract|agreement", r[1], re.I), r[1]))
+    for fact, path in rows:
+        if fact.source_file_id == claim_source_id:
+            continue
+        text = fact.normalized_json.get("text", "")
+        quote = covering_passage(text, stated)
+        if quote:
+            return {
+                "fact_id": fact.id,
+                "path": path,
+                "quote": quote,
+                "conditions": sorted(stated),
+                "agreement": bool(re.search(r"contract|agreement", path, re.I)),
+            }
+    return None
+
+
+def suggest_unit(session: Session, po_line_id: str) -> dict | None:
+    """Prefer a supplier line naming material and unit; fall back to our own order row."""
+    po = session.get(PORow, po_line_id)
+    unit = po.data.get("unit") if po else None
+    if not po or not unit:
+        return None
+    words = UNIT_ALIASES.get(unit.upper(), (unit,))
+    root = supplier_root(session, po.supplier_id)
+    if root:
+        for fact, path in session.execute(
+            select(SourceFact, SourceFile.path)
+            .join(SourceFile)
+            .where(SourceFact.fact_type == "text", SourceFile.path.startswith(root + "/"))
+            .order_by(SourceFile.path)
+        ):
+            for line in fact.normalized_json.get("text", "").splitlines():
+                if contains(line, po.part_number) and any(mentions_unit(line, w) for w in words):
+                    return {
+                        "unit": unit,
+                        "fact_id": fact.id,
+                        "path": path,
+                        "quote": line.strip(),
+                        "from_order": False,
+                    }
+    order_fact = session.get(SourceFact, po.source_fact_id)
+    if not order_fact:
+        return None
+    # evidence_text reads non-text facts as their JSON form, so quote that form exactly.
+    text = json.dumps(order_fact.normalized_json, ensure_ascii=False)
+    match = re.search(r'"part_number": "[^"]*".*?"unit": "[^"]*"', text)
+    if not match:
+        return None
+    source = session.get(SourceFile, order_fact.source_file_id)
+    return {
+        "unit": unit,
+        "fact_id": order_fact.id,
+        "path": source.path if source else "order",
+        "quote": match.group(),
+        "from_order": True,
+    }
+
+
+def covering_passage(text: str, stated: set[str], limit: int = 600) -> str | None:
+    positions = []
+    for match in [*INCOTERM.finditer(text), *PAYMENT.finditer(text)]:
+        if stated_conditions(match.group()) & stated:
+            positions.append((match.start(), match.end()))
+    if not positions:
+        return None
+    first, last = min(p[0] for p in positions), max(p[1] for p in positions)
+    start = max(text.rfind(".", 0, first) + 1, text.rfind("\n", 0, first) + 1)
+    end_candidates = [i for i in (text.find(".", last), text.find("\n", last)) if i != -1]
+    end = min(end_candidates) + 1 if end_candidates else len(text)
+    quote = text[start:end].strip()
+    if len(quote) > limit or not stated <= stated_conditions(quote):
+        return None
+    return quote
 
 
 def contains(text: str, value: str) -> bool:
@@ -99,15 +225,13 @@ def reviewed_values(
             raise ValueError(
                 "Baseline contract must belong to the verified supplier evidence directory"
             )
-        normalized = " ".join(quote.split()).casefold()
-        terms = [
-            " ".join(term.split()).casefold()
-            for term in confirmation.terms.splitlines()
-            if term.strip()
-        ]
-        if not terms or any(term not in normalized for term in terms):
-            raise ValueError("Quote the existing baseline supporting every stated term")
+        mismatch = baseline_mismatch(confirmation.terms, quote)
+        if mismatch:
+            raise ValueError(mismatch)
         baseline = True
+    unacknowledgeable = set(review.acknowledged_risks) - set(confirmation.risks)
+    if unacknowledgeable:
+        raise ValueError(f"Not a recorded risk: {', '.join(sorted(unacknowledgeable))}")
     # Risk flags remain immutable, even when an existing baseline is evidenced.
     return confirmation.model_copy(update={"unit": unit}), baseline
 
@@ -134,6 +258,7 @@ def persist_claim(
             "review": review.model_dump(mode="json"),
             "authenticated_by": actor,
             "baseline_terms_verified": baseline,
+            "acknowledged_risks": review.acknowledged_risks,
         },
         extracted_at=now,
         confidence="buyer_review",
@@ -154,11 +279,15 @@ def review_claim(
     origin = session.get(SourceFact, claim.source_fact_id) if claim.source_fact_id else None
     source_id = origin.source_file_id if origin else None
     confirmation, baseline = reviewed_values(session, original, review, source_id)
-    if not review.unit and not review.baseline_terms_evidence:
-        raise ValueError("Provide unit evidence or baseline terms evidence")
+    if not review.unit and not review.baseline_terms_evidence and not review.acknowledged_risks:
+        raise ValueError("Provide unit evidence, baseline terms evidence or a risk acknowledgement")
     evidence = review.unit_evidence or review.baseline_terms_evidence
-    assert evidence
-    anchor, _ = evidence_text(session, evidence)
+    anchor_id = evidence_text(session, evidence)[0].source_file_id if evidence else None
+    if not anchor_id:
+        # A review of a reply-only claim is recorded against the order line's own source.
+        po = session.get(PORow, claim.po_line_id)
+        po_fact = session.get(SourceFact, po.source_fact_id) if po else None
+        anchor_id = po_fact.source_file_id if po_fact else None
     key = (
         "claim-review:" + hashlib.sha256((claim.id + review.model_dump_json()).encode()).hexdigest()
     )
@@ -168,9 +297,9 @@ def review_claim(
             "supersedes": [original.document_id],
         }
     )
-    fact = persist_claim(
-        session, confirmation, review, source_id or anchor.source_file_id, actor, now, key, baseline
-    )
+    anchor = source_id or anchor_id
+    assert anchor
+    fact = persist_claim(session, confirmation, review, anchor, actor, now, key, baseline)
     job = enqueue(session, "reconcile", {"po_line_id": claim.po_line_id}, f"review:{fact.id}", now)
     return job
 
@@ -354,4 +483,48 @@ def review_findings(session: Session, source_id: str, projection_hash: str) -> d
         "reviewed_line_ids": [
             f["po_line_id"] for r in reviews for f in r.normalized_json["line_findings"]
         ],
+    }
+
+
+ACKNOWLEDGEABLE_RISKS = {
+    "contract": "Supplier wording mentions the agreement or contract terms.",
+    "instructions": "Supplier message contains instructions or notes (e.g. carrier handling).",
+}
+BLOCKING_RISKS = {
+    "fee": "Fees or price changes need commercial approval outside this tool.",
+    "bank": "Bank or payment-detail changes need finance verification outside this tool.",
+    "identity": "Sender or document identity is unverified; verify it before anything else.",
+}
+
+
+def claim_review_context(session: Session, claim: dict) -> dict:
+    """What a buyer can settle on the latest claim, with evidence pre-selected when found."""
+    confirmation = Confirmation.model_validate(claim["confirmation"])
+    row = session.get(ClaimRow, claim["id"])
+    origin = session.get(SourceFact, row.source_fact_id) if row and row.source_fact_id else None
+    open_risks = sorted(set(confirmation.risks) - set(claim.get("acknowledged_risks", [])))
+    terms_open = bool(confirmation.terms.strip()) and not claim.get("baseline_terms_verified")
+    suggestion = (
+        suggest_baseline(
+            session,
+            confirmation.terms,
+            confirmation.supplier_id,
+            origin.source_file_id if origin else None,
+        )
+        if terms_open
+        else None
+    )
+    return {
+        "claim_id": claim["id"],
+        "terms": confirmation.terms if terms_open else "",
+        "terms_unverifiable": bool(terms_open and UNVERIFIABLE_TERMS.search(confirmation.terms)),
+        "suggestion": suggestion,
+        "unit_missing": confirmation.unit is None,
+        "unit_suggestion": suggest_unit(session, row.po_line_id)
+        if confirmation.unit is None and row
+        else None,
+        "acknowledgeable": {
+            r: ACKNOWLEDGEABLE_RISKS[r] for r in open_risks if r in ACKNOWLEDGEABLE_RISKS
+        },
+        "blocking": {r: BLOCKING_RISKS[r] for r in open_risks if r in BLOCKING_RISKS},
     }

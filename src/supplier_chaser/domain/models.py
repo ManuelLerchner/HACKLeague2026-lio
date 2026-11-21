@@ -123,6 +123,7 @@ class Claim(Value):
     source_kind: Literal["file", "message"]
     confirmation: Confirmation
     baseline_terms_verified: bool = False
+    acknowledged_risks: list[str] = []
 
 
 class Discrepancy(Value):
