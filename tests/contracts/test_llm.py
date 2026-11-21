@@ -1,4 +1,5 @@
 import json
+from datetime import date
 
 import httpx
 import pytest
@@ -6,8 +7,23 @@ from openai import OpenAI
 
 from supplier_chaser.adapters.llm_fixture import FixtureLLM
 from supplier_chaser.adapters.llm_provider import OpenAILLM
-from supplier_chaser.agent.interpret_reply import extract_validated, source_quote
+from supplier_chaser.agent.interpret_reply import extract_validated, source_quote, supports_date
 from supplier_chaser.domain.models import Confirmation
+
+
+@pytest.mark.parametrize(
+    "quote,expected",
+    [
+        ("Confirmed 23 November 2026", True),
+        ("Confirmed 23 Nov 2026", True),
+        ("Confirmed 2026-11-23", True),
+        ("Confirmed 24 November 2026", False),
+        ("Confirmed 23/11/26", False),
+        ("Confirmed 2026-11-230", False),
+    ],
+)
+def test_supported_dates_require_exact_day_and_year(quote, expected):
+    assert supports_date(quote, date(2026, 11, 23)) is expected
 
 
 def test_provider_structured_output_contract():

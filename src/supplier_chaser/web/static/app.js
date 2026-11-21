@@ -24,3 +24,35 @@ document.addEventListener("click", async (event) => {
     button.disabled = false;
   }
 });
+
+document.addEventListener("submit", async (event) => {
+  const form = event.target.closest("form.reply-review");
+  if (!form) return;
+  event.preventDefault();
+  const fields = new FormData(form);
+  const decision = event.submitter?.value;
+  const notification = document.querySelector("#notification");
+  const buttons = form.querySelectorAll("button");
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    const response = await fetch(`/api/v1/cases/${form.dataset.case}/review-reply`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json",
+        "X-CSRF-Token": document.querySelector('meta[name="csrf-token"]').content},
+      body: JSON.stringify({message_id: form.dataset.message, decision,
+        reviewer: fields.get("reviewer"), note: fields.get("note"),
+        identity_verified: fields.has("identity_verified")})
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "Complete the review fields.");
+    notification.textContent = decision === "verify"
+      ? "Identity review recorded. Extraction queued; commercial terms remain unapproved."
+      : "Reply rejected. No supplier claim was accepted.";
+    notification.hidden = false;
+    setTimeout(() => location.reload(), 1200);
+  } catch (error) {
+    notification.textContent = error.message;
+    notification.hidden = false;
+    buttons.forEach(button => { button.disabled = false; });
+  }
+});

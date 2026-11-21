@@ -13,7 +13,7 @@ from supplier_chaser.agent.extract_source import extract_source
 from supplier_chaser.bootstrap import llm_adapter, mail_gateway, portal_client
 from supplier_chaser.cases.service import reconcile_line
 from supplier_chaser.clock import Clock, SystemClock
-from supplier_chaser.communications.receive import receive
+from supplier_chaser.communications.receive import interpret_stored_reply, receive
 from supplier_chaser.communications.send import send_message
 from supplier_chaser.config import Settings
 from supplier_chaser.ingestion.mapping import MappingSpec
@@ -115,7 +115,16 @@ class Worker:
                     self.settings,
                     now,
                     payload.get("reminder", False),
+                    payload.get("require_approval", False),
                 )
+            elif job.job_type == "review_reply":
+                from supplier_chaser.adapters.db import MessageRow
+
+                row = session.get(MessageRow, payload["message_id"])
+                review = row.metadata_json.get("buyer_review") if row else None
+                if not row or not review or not review["request"]["identity_verified"]:
+                    raise ValueError("Reply requires a recorded identity verification")
+                interpret_stored_reply(session, row, self.extractor, now)
             elif job.job_type == "apply_mapping":
                 table = session.get(SourceFact, payload["table_fact_id"])
                 if table is None:

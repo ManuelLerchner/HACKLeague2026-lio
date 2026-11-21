@@ -2,7 +2,7 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
@@ -51,6 +51,15 @@ class Escalation(BaseModel):
     reason: str = Field(min_length=3, max_length=1000)
 
 
+class ReplyReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message_id: str
+    decision: Literal["verify", "reject"]
+    reviewer: str = Field(min_length=2, max_length=100)
+    note: str = Field(min_length=10, max_length=2000)
+    identity_verified: bool = False
+
+
 def serialize_case(session: Session, case: CaseRow) -> dict:
     po = session.get(PORow, case.po_line_id)
     supplier = session.get(SupplierRow, po.supplier_id) if po else None
@@ -64,7 +73,47 @@ def serialize_case(session: Session, case: CaseRow) -> dict:
         .order_by(MessageRow.sent_or_received_at.desc())
         .limit(1)
     )
+    jobs = [
+        j
+        for j in session.scalars(
+            select(JobRow).where(JobRow.status.in_(["queued", "running", "failed"]))
+        )
+        if j.payload_json["payload"].get("case_id") == case.id
+    ]
+    pending = any(j.status in {"queued", "running"} for j in jobs)
+    held = session.scalar(
+        select(MessageRow.id)
+        .where(
+            MessageRow.case_id == case.id,
+            MessageRow.direction == "inbound",
+            MessageRow.status == "needs_review",
+        )
+        .limit(1)
+    )
+    if case.state in {State.RESOLVED, State.CANCELLED}:
+        group, action = "Completed", "View evidence"
+    elif pending:
+        group, action = "In progress", "Worker action queued"
+    elif held:
+        group, action = "Needs your action", "Review supplier reply"
+    elif any(j.status == "failed" for j in jobs):
+        group, action = "Needs your action", "Review failed action"
+    elif case.state == State.AWAITING_REPLY:
+        group, action = "Waiting for supplier", "Await reply"
+    else:
+        group = "Needs your action"
+        action = (
+            "Draft supplier question"
+            if case.state in {State.NEW, State.INVESTIGATING}
+            else "Review and send draft"
+            if case.state in {State.DRAFT_READY, State.NEEDS_APPROVAL}
+            else "Review blocker"
+        )
     return {
+        "action_group": group,
+        "next_action": action,
+        "pending_work": pending,
+        "jobs": [{"type": j.job_type, "status": j.status, "error": j.last_error} for j in jobs],
         "id": case.id,
         "state": case.state,
         "priority": case.priority,
@@ -218,10 +267,20 @@ def create_app(
                 query = query.where(CaseRow.priority == priority)
             if supplier_id:
                 query = query.where(PORow.supplier_id == supplier_id)
-            return [
+            result = [
                 serialize_case(session, c)
                 for c in session.scalars(query.order_by(CaseRow.priority, CaseRow.created_at))
             ]
+            groups = {
+                "Needs your action": 0,
+                "In progress": 1,
+                "Waiting for supplier": 2,
+                "Completed": 3,
+            }
+            return sorted(
+                result,
+                key=lambda c: (groups[c["action_group"]], c["priority"], c["updated_at"], c["id"]),
+            )
 
     @app.get("/api/v1/cases/{case_id}", dependencies=[Depends(authorized)])
     def detail(case_id: str) -> dict:
@@ -244,6 +303,7 @@ def create_app(
                     "status": m.status,
                     "at": m.sent_or_received_at,
                     "extraction": m.metadata_json.get("extraction"),
+                    "review": m.metadata_json.get("buyer_review"),
                 }
                 for m in messages
             ]
@@ -293,13 +353,104 @@ def create_app(
                 State.INVESTIGATING,
                 State.DRAFT_READY,
                 State.NEEDS_APPROVAL,
+                State.ESCALATED,
+                State.BLOCKED,
             }:
                 raise HTTPException(409, "Case is not ready for a draft")
+            held_replies = session.scalars(
+                select(MessageRow).where(
+                    MessageRow.case_id == case.id,
+                    MessageRow.direction == "inbound",
+                    MessageRow.status.in_(["needs_review", "review_queued"]),
+                )
+            )
+            if any(
+                row.status == "review_queued" or not row.metadata_json.get("buyer_review")
+                for row in held_replies
+            ):
+                raise HTTPException(
+                    409, "Review the held supplier reply before drafting another inquiry"
+                )
+            if case.state in {State.ESCALATED, State.BLOCKED}:
+                move(
+                    session,
+                    case,
+                    State.INVESTIGATING,
+                    clock.now(),
+                    "Buyer requested a factual clarification; no terms accepted",
+                )
             job = enqueue(
                 session,
                 "draft",
-                {"case_id": case.id},
+                {"case_id": case.id, "require_approval": True},
                 f"manual-draft:{case.id}:{case.updated_at.isoformat()}",
+                clock.now(),
+            )
+            return {"job_id": job.id, "status": job.status}
+
+    @app.post("/api/v1/cases/{case_id}/review-reply", status_code=202)
+    def review_reply(case_id: str, review: ReplyReview, admin: str = Depends(authorized)) -> dict:
+        with factory.begin() as session:
+            case = get_case(session, case_id, lock=True)
+            row = session.get(MessageRow, review.message_id)
+            if row is None or row.case_id != case.id or row.direction != "inbound":
+                raise HTTPException(404, "Reply not found for this case")
+            previous = row.metadata_json.get("buyer_review")
+            if previous:
+                if previous["request"] == review.model_dump():
+                    return {"message_id": row.id, "status": row.status}
+                if not (
+                    previous["request"]["decision"] == "verify"
+                    and review.decision == "reject"
+                    and row.status == "needs_review"
+                ):
+                    raise HTTPException(409, "This reply already has a recorded review")
+            if case.active_key is None or row.status != "needs_review":
+                raise HTTPException(409, "Reply is not awaiting review on an active case")
+            if review.decision == "verify" and not review.identity_verified:
+                raise HTTPException(
+                    422, "Verify sender identity and order attribution before processing"
+                )
+            row.metadata_json = {
+                **row.metadata_json,
+                "buyer_review_history": row.metadata_json.get("buyer_review_history", [])
+                + ([previous] if previous else []),
+                "buyer_review": {
+                    "request": review.model_dump(),
+                    "authenticated_by": admin,
+                    "at": clock.now().isoformat(),
+                },
+            }
+            row.status = "review_queued" if review.decision == "verify" else "rejected"
+            session.add(
+                ApprovalRow(
+                    case_id=case.id,
+                    action_type="verify_reply_identity",
+                    proposed_payload={"message_id": row.id, **review.model_dump()},
+                    status="approved" if review.decision == "verify" else "rejected",
+                    decided_by=review.reviewer,
+                    decided_at=clock.now(),
+                )
+            )
+            record_event(
+                session,
+                case,
+                "message.reviewed",
+                {
+                    "message_id": row.id,
+                    "reason": review.note,
+                    "decision": review.decision,
+                    "reviewer": review.reviewer,
+                },
+                clock.now(),
+            )
+            if review.decision == "reject":
+                return {"message_id": row.id, "status": row.status}
+            job = enqueue(
+                session,
+                "review_reply",
+                {"case_id": case.id, "message_id": row.id},
+                f"review-reply:{row.id}",
                 clock.now(),
             )
             return {"job_id": job.id, "status": job.status}
@@ -419,6 +570,7 @@ def create_app(
                     c["priority"] in {"P0", "P1"} and c["state"] not in {"RESOLVED", "CANCELLED"}
                     for c in cases
                 ),
+                "action_count": sum(c["action_group"] == "Needs your action" for c in cases),
                 "awaiting": sum(c["state"] == "AWAITING_REPLY" for c in cases),
                 "resolved": sum(c["state"] == "RESOLVED" for c in cases),
             },

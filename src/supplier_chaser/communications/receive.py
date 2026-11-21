@@ -1,4 +1,5 @@
 import hashlib
+import json
 from datetime import datetime
 
 from sqlalchemy import or_, select
@@ -78,10 +79,38 @@ def receive(
                 "Sender authentication is unverified; review identity",
             )
         return
+    interpret_stored_reply(session, row, extractor, now)
+
+
+def interpret_stored_reply(
+    session: Session, row: MessageRow, extractor: LLMExtractor, now: datetime
+) -> None:
+    """Interpret a correlated reply after transport or recorded buyer identity verification."""
+    if row.status == "rejected" or row.metadata_json.get("extraction"):
+        return
+    case = session.scalar(select(CaseRow).where(CaseRow.id == row.case_id).with_for_update())
+    if case is None or case.active_key is None:
+        row.status = "needs_review"
+        return
     try:
-        confirmation = extract_validated(extractor, message.body)
         repository = CommitmentRepository(session)
         po = repository.get_po_line(case.po_line_id)
+        identifiers = json.dumps(
+            {
+                "supplier_id": po.supplier_id,
+                "po_number": po.po_number,
+                "line_number": po.line_number,
+            }
+        )
+        confirmation = extract_validated(
+            extractor,
+            "Trusted thread attribution (identifiers only, not evidence of quantities or dates): "
+            + identifiers
+            + "\nExtract only from the original supplier reply below.\n"
+            + row.body,
+        )
+        if confirmation.evidence_quote not in row.body:
+            raise ValueError("Reply evidence must come from the original message")
         if (confirmation.supplier_id, confirmation.po_number, confirmation.line_number) != (
             po.supplier_id,
             po.po_number,
@@ -101,6 +130,7 @@ def receive(
             **row.metadata_json,
             "extraction": confirmation.model_dump(mode="json"),
         }
+        row.status = "received"
         if case.active_key is not None:
             if case.state in {State.AWAITING_REPLY, State.ESCALATED, State.BLOCKED}:
                 move(
