@@ -12,7 +12,7 @@ from supplier_chaser.adapters.db import JobRow, PORow, SourceFact, SourceFile, u
 from supplier_chaser.config import Settings
 from supplier_chaser.workflow.jobs import enqueue
 
-INVESTIGATION_VERSION = "document-investigation-v2"
+INVESTIGATION_VERSION = "document-investigation-v3"
 
 
 def mentions(text: str, identifier: str) -> bool:
@@ -140,7 +140,7 @@ def all_document_findings(session: Session) -> dict[str, list[dict]]:
         for job in session.scalars(select(JobRow).where(JobRow.job_type == "investigate_document"))
     }
     result: dict[str, list[dict]] = {}
-    for source, _, orders, fingerprint in relevant_documents(session):
+    for source, text, orders, fingerprint in relevant_documents(session):
         job = jobs.get(f"investigate-document:{source.id}:{fingerprint}")
         if job and job.status in {"queued", "running"}:
             fallback = {
@@ -175,15 +175,26 @@ def all_document_findings(session: Session) -> dict[str, list[dict]]:
             lines = [
                 line for line in finding.get("line_findings", []) if line["po_line_id"] == po.id
             ]
-            if reviewed and lines:
-                per_line["status"] = (
-                    "complete"
-                    if all(line["attribution"] == "matched" for line in lines)
-                    else "ambiguous"
-                )
-                per_line["summary"] = "\n".join(line["reason"] for line in lines)
+            if lines:
+                per_line.update(line_status(lines))
+            elif per_line["status"] == "error" and not mentions(text, po.part_number):
+                # A failed extraction says nothing about materials the document never names.
+                per_line["status"] = "not_covered"
             result.setdefault(po.id, []).append(per_line)
     return result
+
+
+def line_status(lines: list[dict]) -> dict:
+    """A line's status comes from its own attribution, never from sibling lines."""
+    attributions = {line["attribution"] for line in lines}
+    if attributions == {"matched"}:
+        status = "complete"
+    elif attributions == {"unmatched"}:
+        # The document has no item for this line: it neither confirms nor contradicts it.
+        status = "not_covered"
+    else:
+        status = "ambiguous"
+    return {"status": status, "summary": "\n".join(line["reason"] for line in lines)}
 
 
 def document_findings(session: Session, line_id: str) -> list[dict]:

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import uuid4
 
 from sqlalchemy import (
@@ -179,6 +179,23 @@ class ApprovalRow(Base):
     status: Mapped[str]
     decided_by: Mapped[str | None]
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+
+
+class DecisionRow(Base):
+    """A buyer decision that settles a failed check, for a supplier or one order line."""
+
+    __tablename__ = "decisions"
+    id: Mapped[str] = mapped_column(primary_key=True, default=uid)
+    kind: Mapped[str] = mapped_column(String(40))
+    supplier_id: Mapped[str] = mapped_column(String(100), index=True)
+    po_line_id: Mapped[str | None] = mapped_column(String(200), index=True)
+    choice: Mapped[str] = mapped_column(String(40))
+    value: Mapped[dict] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(Text)
+    decided_by: Mapped[str]
+    decided_at: Mapped[datetime] = mapped_column(UTCDateTime)
+    valid_until: Mapped[date | None]
+    revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class SystemRow(Base):

@@ -244,7 +244,7 @@ def reply_claim(session, now, risks):
     return session.scalar(select(ClaimRow))
 
 
-def test_prefilled_baseline_and_acknowledged_flag_resolve_reply_claim(settings, factory, clock):
+def test_rules_verify_terms_and_acknowledged_flag_resolves_reply_claim(settings, factory, clock):
     from supplier_chaser.ingestion.document_review import claim_review_context
 
     with factory.begin() as session:
@@ -258,17 +258,19 @@ def test_prefilled_baseline_and_acknowledged_flag_resolve_reply_claim(settings, 
             clock.now(),
         )
         assert before.status == "UNKNOWN"
+        # The agreement states FOB Busan, so the rules verify the terms without a buyer.
+        assert before.latest_claim.baseline_terms_verified
+        incoterm = next(c for c in before.latest_claim.checks if c.name == "incoterm")
+        assert incoterm.status == "pass" and contract.source_file_id in {
+            session.scalar(select(SourceFile.id).where(SourceFile.path == path))
+            for path in incoterm.sources
+        }
         context = claim_review_context(session, before.latest_claim.model_dump(mode="json"))
-        suggestion = context["suggestion"]
-        assert suggestion["fact_id"] == contract.id
-        assert "FOB Busan" in suggestion["quote"]
+        assert not context["terms"] and context["suggestion"] is None
         assert list(context["acknowledgeable"]) == ["contract"] and not context["blocking"]
         review = ClaimReview(
             reviewer="Buyer",
             note="Supplier restates the framework agreement; no change.",
-            baseline_terms_evidence=EvidenceReference(
-                fact_id=suggestion["fact_id"], quote=suggestion["quote"]
-            ),
             acknowledged_risks=["contract"],
         )
         review_claim(session, claim.id, review, "admin", clock.now())
@@ -342,3 +344,50 @@ def test_missing_unit_prefills_from_order_and_validates(settings, factory, clock
         original = Confirmation.model_validate(claim.data).model_copy(update={"unit": None})
         confirmed, _ = reviewed_values(session, original, review, None)
         assert confirmed.unit == "PC"
+
+
+def add_material_master(session, now, uom="PC", path="soony/master/components.csv"):
+    source = SourceFile(
+        path=path,
+        checksum=f"master-{path}",
+        media_type="text/csv",
+        parse_status="needs_review",
+        blob_ref=f"master-{path}",
+        downloaded_at=now,
+    )
+    session.add(source)
+    session.flush()
+    session.add(
+        SourceFact(
+            source_file_id=source.id,
+            record_locator="table:csv",
+            fact_type="table",
+            normalized_json={
+                "columns": ["component_id", "uom"],
+                "rows": [{"locator": "row:2", "values": {"component_id": "TEST-PART", "uom": uom}}],
+            },
+            extracted_at=now,
+        )
+    )
+    session.flush()
+
+
+@pytest.mark.parametrize(
+    ("uom", "path", "expected"),
+    [
+        ("PC", "soony/master/components.csv", "PC"),
+        ("KG", "soony/master/components.csv", None),
+        ("PC", "suppliers/synthetic/components.csv", None),
+    ],
+)
+def test_unitless_claim_takes_unit_only_from_agreeing_material_master(
+    settings, factory, clock, uom, path, expected
+):
+    with factory.begin() as session:
+        seed_document(session, clock.now())
+        add_material_master(session, clock.now(), uom, path)
+        claim = reply_claim(session, clock.now(), [])
+        claim.data = {**claim.data, "unit": None, "terms": ""}
+        claims = CommitmentRepository(session).get_claims("TEST-ORDER/2")
+        assert claims[0].confirmation.unit == expected
+        assert claims[0].unit_source == ("soony/master/components.csv" if expected else None)

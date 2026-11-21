@@ -75,3 +75,12 @@ def test_stored_unit_words_compare_as_codes():
     assert canonical_unit("sztuk") == "PC"
     assert canonical_unit("KG") == "KG"
     assert canonical_unit(None) is None
+
+
+def test_unit_read_from_word_beside_quoted_quantity():
+    from supplier_chaser.agent.interpret_reply import unit_beside_quantity
+
+    assert unit_beside_quantity("We confirm 9,000 pcs on 2027-01-04.", Decimal("9000")) == "PC"
+    assert unit_beside_quantity("数量为460,000件。", Decimal("460000")) == "PC"
+    assert unit_beside_quantity("We confirm 9,000 on 2027-01-04.", Decimal("9000")) is None
+    assert unit_beside_quantity("9,000 boxes of 10 pcs", Decimal("9000")) is None

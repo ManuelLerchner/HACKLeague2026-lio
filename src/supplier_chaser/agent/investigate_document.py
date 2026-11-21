@@ -4,7 +4,14 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from supplier_chaser.adapters.db import CaseRow, MessageRow, SourceFact, SourceFile, SupplierRow
+from supplier_chaser.adapters.db import (
+    CaseRow,
+    MessageRow,
+    SourceFact,
+    SourceFile,
+    SupplierRow,
+)
+from supplier_chaser.adapters.repositories import CommitmentRepository
 from supplier_chaser.agent.discover import relevant_documents
 from supplier_chaser.agent.draft import create_draft
 from supplier_chaser.agent.interpret_reply import (
@@ -13,10 +20,13 @@ from supplier_chaser.agent.interpret_reply import (
     validate_quantity_unit,
 )
 from supplier_chaser.cases.service import move, reconcile_line
+from supplier_chaser.commitments.reconcile import reconcile
+from supplier_chaser.communications.receive import supersede_drafts
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.documents import DocumentItems
 from supplier_chaser.domain.models import Confirmation, Delivery, POLine, State
 from supplier_chaser.ingestion.attribution import attribute_items
+from supplier_chaser.ingestion.item_numbering import learned_reference_map
 from supplier_chaser.ingestion.order_coverage import all_order_lines
 from supplier_chaser.ingestion.poll import save_claim
 from supplier_chaser.ports.llm import LLMDrafter, LLMExtractor
@@ -149,7 +159,14 @@ def investigate_document(
             matching_context, incomplete = all_order_lines(session, orders)
             attributions = [
                 attribution
-                for attribution in attribute_items(document, matching_context)
+                for attribution in attribute_items(
+                    document,
+                    matching_context,
+                    item_reference_map=learned_reference_map(
+                        session, document, source.id, matching_context
+                    ),
+                    reference_method="learned_reference",
+                )
                 if attribution.po_line_id in {po.key for po in orders}
             ]
             attributions = [
@@ -293,11 +310,27 @@ def investigate_document(
                     )
                     .limit(1)
                 )
-                if held_reply:
+                # The supplier already answered with one applicable claim; what keeps it open
+                # (terms, flags, unit) is the buyer's to settle, not another inquiry. Late
+                # dates, quantity gaps and contradictions still get a factual question.
+                line_assessment = reconcile(
+                    po, CommitmentRepository(session).get_claims(po.key), now
+                )
+                answered = (
+                    line_assessment.status == "UNKNOWN" and line_assessment.latest_claim is not None
+                )
+                if held_reply or answered:
                     continue
                 if case.state in {State.NEW, State.ESCALATED}:
                     try:
                         with session.begin_nested():
+                            # An older draft predates this evidence and would block the new one.
+                            supersede_drafts(
+                                session,
+                                case,
+                                now,
+                                "Superseded by a draft from new document evidence",
+                            )
                             move(
                                 session,
                                 case,

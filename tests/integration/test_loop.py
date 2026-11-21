@@ -315,3 +315,32 @@ def test_unverified_reply_cannot_skip_identity_through_retry(seeded, worker, fac
         row.metadata_json = {**row.metadata_json, "extraction_error": "forged"}
         with pytest.raises(ValueError):
             retry_reply_extraction(session, row, "buyer", clock.now())
+
+
+def test_verified_reply_failed_before_errors_were_recorded_can_be_retried(
+    seeded, worker, factory, clock
+):
+    from supplier_chaser.workflow.retry import retry_reply_extraction
+
+    message = demo_reply(seeded, worker, factory, clock)
+
+    def broken(text):
+        raise ValueError("old extractor")
+
+    original = worker.extractor.extract_confirmation
+    worker.extractor.extract_confirmation = broken
+    with factory.begin() as session:
+        receive(session, message, worker.extractor, clock.now(), seeded.mail_from)
+    worker.extractor.extract_confirmation = original
+    with factory.begin() as session:
+        row = session.scalar(select(MessageRow).where(MessageRow.direction == "inbound"))
+        row.metadata_json = {k: v for k, v in row.metadata_json.items() if k != "extraction_error"}
+        job = retry_reply_extraction(session, row, "buyer", clock.now())
+        job_id = job.id
+    with factory() as session:
+        worker.execute(session.get(JobRow, job_id))
+    with factory() as session:
+        assert (
+            session.scalar(select(MessageRow.status).where(MessageRow.direction == "inbound"))
+            == "received"
+        )

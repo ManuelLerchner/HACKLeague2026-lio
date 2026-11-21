@@ -1,17 +1,22 @@
 import csv
 import io
 import json
+from functools import partial
 from html.parser import HTMLParser
 from itertools import islice
 from pathlib import PurePosixPath
 from zipfile import ZipFile
 
 from openpyxl import load_workbook
+from PIL import Image
 from pypdf import PdfReader
 
 from supplier_chaser.domain.models import Confirmation, ParsedFact, POLine, Supplier
 from supplier_chaser.ingestion.normalize import normalize_po
+from supplier_chaser.ingestion.ocr import OCR, render_pdf_page
 from supplier_chaser.ingestion.tables import table_fact
+
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}
 
 
 class PlainText(HTMLParser):
@@ -44,7 +49,13 @@ def record(row: dict, locator: str) -> ParsedFact:
     return ParsedFact(kind=kind, locator=locator, data=value.model_dump(mode="json"))
 
 
-def parse(path: str, data: bytes) -> list[ParsedFact]:
+def frame(image: Image.Image, page: int) -> Image.Image:
+    # Multi-page TIFFs expose pages as frames; seeking keeps decoding lazy.
+    image.seek(page - 1)
+    return image
+
+
+def parse(path: str, data: bytes, ocr: OCR | None = None) -> list[ParsedFact]:
     suffix = PurePosixPath(path).suffix.lower()
     if suffix == ".json":
         payload = json.loads(data)
@@ -152,8 +163,25 @@ def parse(path: str, data: bytes) -> list[ParsedFact]:
         if len(pdf.pages) > 100:
             raise ValueError("PDF exceeds the page limit")
         return [
-            ParsedFact(kind="text", locator=f"page:{i}", data={"text": p.extract_text() or ""})
-            for i, p in enumerate(pdf.pages, 1)
+            ParsedFact(
+                kind="text",
+                locator=f"page:{i}",
+                data=ocr.text(text, partial(render_pdf_page, data, i - 1))
+                if ocr
+                else {"text": text},
+            )
+            for i, text in enumerate((p.extract_text() or "" for p in pdf.pages), 1)
+        ]
+    if suffix in IMAGE_SUFFIXES and ocr:
+        image = Image.open(io.BytesIO(data))
+        frames = getattr(image, "n_frames", 1)
+        if frames > 100:
+            raise ValueError("Image exceeds the page limit")
+        return [
+            ParsedFact(
+                kind="text", locator=f"page:{i}", data=ocr.text("", partial(frame, image, i))
+            )
+            for i in range(1, frames + 1)
         ]
     if suffix in {".txt", ".md", ".html"}:
         text = data.decode("utf-8")

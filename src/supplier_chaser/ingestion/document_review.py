@@ -22,6 +22,12 @@ from supplier_chaser.adapters.db import (
 from supplier_chaser.agent.interpret_reply import UNIT_ALIASES, mentions_unit, source_quote
 from supplier_chaser.domain.documents import DocumentItems
 from supplier_chaser.domain.models import Confirmation, Delivery, Value
+from supplier_chaser.domain.terms import (
+    INCOTERM,
+    PAYMENT,
+    UNVERIFIABLE_TERMS,
+    stated_conditions,
+)
 from supplier_chaser.ingestion.poll import save_claim
 from supplier_chaser.workflow.jobs import enqueue
 
@@ -60,22 +66,6 @@ def evidence_text(session: Session, reference: EvidenceReference) -> tuple[Sourc
         raise ValueError("Choose an original text, table, order or supplier evidence fact")
     text = fact.normalized_json.get("text") or json.dumps(fact.normalized_json, ensure_ascii=False)
     return fact, source_quote(text, reference.quote)
-
-
-INCOTERM = re.compile(r"\b(EXW|FCA|FAS|FOB|CFR|CIF|CPT|CIP|DAP|DPU|DDP)\s+([A-Z][\w-]*)")
-PAYMENT = re.compile(r"\bnet\s?(\d{1,3})\b|\b(\d{1,3})\s+days\s+net\b", re.IGNORECASE)
-# Commercial content beyond delivery and payment terms is never verified as a baseline.
-UNVERIFIABLE_TERMS = re.compile(
-    r"fee|surcharge|price|cost|charge|deposit|prepay|advance|bank|iban|release|penalt|%|increase",
-    re.IGNORECASE,
-)
-
-
-def stated_conditions(text: str) -> set[str]:
-    """Incoterm and payment conditions, normalised so wording and layout do not matter."""
-    conditions = {f"{code} {place.casefold()}" for code, place in INCOTERM.findall(text)}
-    conditions |= {f"NET{a or b}" for a, b in PAYMENT.findall(text)}
-    return conditions
 
 
 def baseline_mismatch(terms: str, quote: str) -> str | None:

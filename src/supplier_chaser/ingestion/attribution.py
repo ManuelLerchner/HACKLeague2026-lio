@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from supplier_chaser.domain.documents import (
     DocumentItem as DocumentItem,
@@ -30,6 +31,7 @@ def attribute_items(
     orders: Sequence[POLine],
     *,
     item_reference_map: Mapping[str, str] | None = None,
+    reference_method: Literal["reviewed_reference", "learned_reference"] = "reviewed_reference",
 ) -> list[LineAttribution]:
     """Return line attribution; quantity/date similarity never establishes identity.
 
@@ -85,8 +87,13 @@ def attribute_items(
                     item_ids=reviewed,
                     candidate_item_ids=candidates,
                     proposed_item_ids=proposed,
-                    method="reviewed_reference",
-                    reason="A reviewed reference mapping attributes these rows to the order line.",
+                    method=reference_method,
+                    reason=(
+                        "A reviewed reference mapping attributes these rows to the order line."
+                        if reference_method == "reviewed_reference"
+                        else "This supplier numbers items as ten times the order line in all "
+                        "earlier documents; the item reference and material identify the line."
+                    ),
                 )
             )
         elif len(peers) == 1 and len(items) == 1 and not references:

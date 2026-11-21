@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     portal_poll_seconds: int = Field(default=60, ge=1)
     trusted_supplier_paths: list[str] = []
     max_file_bytes: int = Field(default=10_000_000, gt=0)
+    # OCR runs locally on scans; a missing binary is reported per page instead of failing.
+    ocr_enabled: bool = True
+    ocr_languages: str = "eng+deu+pol+kor+chi_sim"
+    ocr_max_pages: int = Field(default=20, ge=1)
+    ocr_timeout_seconds: float = Field(default=120.0, gt=0)
     mail_mode: Literal["fixture", "smtp_imap"] = "fixture"
     mail_from: str = "buyer@example.test"
     registered_sender_verified: bool = False

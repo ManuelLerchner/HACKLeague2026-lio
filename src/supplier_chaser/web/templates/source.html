@@ -32,8 +32,9 @@
 <div class="mapping-buttons"><button type="submit" value="preview">Preview all rows</button><button type="submit" value="apply">Approve mapping and queue import</button></div><pre class="mapping-result" aria-live="polite"></pre>
 </form>{% endif %}</section>{% endfor %}
 {% for fact in texts %}
-<section class="panel"><div class="panel-heading"><h2>{{ fact.record_locator }} · extracted text</h2></div>
+<section class="panel"><div class="panel-heading"><h2>{{ fact.record_locator }} · {{ "OCR text" if fact.normalized_json.ocr else "extracted text" }}</h2></div>
 <div class="mapping-form"><p>This is untrusted source text. Review the document and its order attribution before extracting a proposed commitment.</p>
+{% if fact.normalized_json.ocr %}<p class="muted">Recognized locally by {{ fact.normalized_json.ocr.engine }} ({{ fact.normalized_json.ocr.languages }}) · {{ fact.normalized_json.ocr.status }}. OCR can misread digits and dates; compare against the original.</p>{% endif %}
 <p>Evidence reference: <code>{{ fact.id }}</code></p><pre class="source-text">{{ fact.normalized_json.text[:30000] }}</pre>
 {% if analyses %}
 <div class="notice">Document investigation results are shown above. Use those findings instead of assigning this page to an order line manually.</div>

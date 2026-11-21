@@ -73,6 +73,13 @@ def reconcile(
         return Assessment(status="DISCREPANCY", issues=[conflict], reason=conflict.explanation)
     latest = active[0]
     confirmation = latest.confirmation
+    failed = [check for check in latest.checks if check.status == "fail"]
+    if failed:
+        return Assessment(
+            status="UNKNOWN",
+            reason="Needs a buyer decision: " + " ".join(check.detail for check in failed),
+            latest_claim=latest,
+        )
     if (
         confirmation.intent != "confirmed"
         or not confirmation.deliveries
@@ -93,7 +100,12 @@ def reconcile(
                 IssueType.QUANTITY_MISMATCH, "Confirmed total differs from ordered total.", latest
             )
         )
-    if any(d.day and d.day > po.requested_delivery for d in confirmation.deliveries):
+    accepted = latest.accepted_promise
+    # A buyer-accepted promise covers that date and earlier ones, never a later slip.
+    if any(
+        d.day and d.day > po.requested_delivery and not (accepted and d.day <= accepted)
+        for d in confirmation.deliveries
+    ):
         issues.append(
             issue(
                 IssueType.LATE_COMMITMENT,
