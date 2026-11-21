@@ -7,6 +7,11 @@ document.addEventListener("submit", async event => {
   const body = Object.fromEntries([...fields.entries()].filter(([, value]) => value !== ""));
   const button = event.submitter;
   if (button?.name) body[button.name] = button.value;
+  if (body.choice === "renewal_confirmed" && !body.valid_until) {
+    result.textContent = "Enter the date until which the renewed agreement applies.";
+    form.querySelector('[name="valid_until"]')?.focus();
+    return;
+  }
   try { localStorage.setItem("supplier-chaser:reviewer", body.decided_by || ""); } catch { /* storage unavailable */ }
   form.querySelectorAll("button").forEach(b => { b.disabled = true; });
   try {

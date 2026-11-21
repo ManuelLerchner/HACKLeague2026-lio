@@ -208,3 +208,16 @@ def test_explicit_rate_limit_recovery_rejects_uncertain_and_changed_messages(
             message.metadata_json["approved_body_sha256"]
             == hashlib.sha256(message.body.encode()).hexdigest()
         )
+
+
+def test_queue_explains_deliberately_delayed_jobs(settings, factory, clock):
+    from datetime import timedelta
+
+    with factory.begin() as session:
+        job = enqueue(session, "reconcile", {"po_line_id": "X/1"}, "later", clock.now())
+        job.run_after = clock.now() + timedelta(hours=20)
+    with TestClient(create_app(settings, factory, clock)) as client:
+        client.post("/login", data={"token": "test-secret"})
+        page = client.get("/worker-queue").text
+        assert "Scheduled for a later run. Starts" in page
+        assert "Waiting for worker / scheduled time" not in page

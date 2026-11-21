@@ -68,6 +68,16 @@ class ReplyReview(BaseModel):
     identity_verified: bool = False
 
 
+def scheduled_reason(session: Session, job: JobRow, now: datetime) -> str | None:
+    """Why a queued job deliberately waits, so a future start is not mistaken for a hang."""
+    if job.status != "queued" or job.run_after <= now:
+        return None
+    message_id = job.payload_json["payload"].get("message_id")
+    message = session.get(MessageRow, message_id) if message_id else None
+    reason = message.metadata_json.get("rate_limit_reason") if message else None
+    return reason or "Scheduled for a later run."
+
+
 def serialize_case(session: Session, case: CaseRow, findings: list[dict] | None = None) -> dict:
     po = session.get(PORow, case.po_line_id)
     supplier = session.get(SupplierRow, po.supplier_id) if po else None
@@ -712,6 +722,7 @@ def create_app(
                         "source_id": source_id,
                         "case_id": payload.get("case_id"),
                         "retryable": job.status == "failed" and job.job_type in RETRYABLE_JOB_TYPES,
+                        "scheduled_reason": scheduled_reason(session, job, clock.now()),
                     }
                 )
             template = (
