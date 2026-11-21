@@ -160,6 +160,7 @@ class Inbound(Value):
     in_reply_to: str | None = None
     references: list[str] = []
     identity_verified: bool = False
+    authentication: str = ""
 
 
 class Outbound(Value):

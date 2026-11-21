@@ -42,8 +42,8 @@ def validate_document(document: DocumentItems, text: str, orders: list[POLine]) 
             raise ValueError("Item date lacks evidence")
         if item.item_reference and item.item_reference not in quote:
             raise ValueError("Item reference lacks evidence")
-        validate_quantity_unit(item.unit, quote)
-        items.append(item.model_copy(update={"evidence_quote": quote}))
+        unit = validate_quantity_unit(item.unit, quote)
+        items.append(item.model_copy(update={"evidence_quote": quote, "unit": unit}))
     return document.model_copy(update={"items": items, "complete_order_lines": False})
 
 

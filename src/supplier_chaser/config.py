@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     imap_port: int = 993
     imap_user: str = ""
     imap_password: SecretStr = SecretStr("")
+    # authserv-id of our own receiving server, e.g. "mx.google.com"; empty trusts no header.
+    trusted_authserv_id: str = ""
     llm_provider: Literal["fixture", "openai"] = "fixture"
     llm_api_key: SecretStr = SecretStr("")
     llm_model: str = "gpt-4.1-mini"

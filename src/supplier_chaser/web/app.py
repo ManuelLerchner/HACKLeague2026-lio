@@ -40,7 +40,7 @@ from supplier_chaser.web.evidence import preview_file
 from supplier_chaser.web.job_retries import register_retry_routes
 from supplier_chaser.web.sources import register_source_routes
 from supplier_chaser.workflow.jobs import enqueue
-from supplier_chaser.workflow.retry import RETRYABLE_JOB_TYPES
+from supplier_chaser.workflow.retry import RETRYABLE_JOB_TYPES, can_retry_extraction
 
 ROOT = Path(__file__).parent
 
@@ -327,6 +327,8 @@ def create_app(
                     "status": m.status,
                     "at": m.sent_or_received_at,
                     "extraction": m.metadata_json.get("extraction"),
+                    "extraction_error": m.metadata_json.get("extraction_error"),
+                    "can_retry_extraction": can_retry_extraction(m),
                     "review": m.metadata_json.get("buyer_review"),
                     "block_reasons": m.metadata_json.get("block_reasons", []),
                     "retry_after": m.metadata_json.get("scheduled_send_at"),

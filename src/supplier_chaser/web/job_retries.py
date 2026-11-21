@@ -6,7 +6,11 @@ from sqlalchemy.orm import sessionmaker
 
 from supplier_chaser.adapters.db import CaseRow, JobRow, MessageRow
 from supplier_chaser.clock import Clock
-from supplier_chaser.workflow.retry import retry_job, retry_rate_limited_message
+from supplier_chaser.workflow.retry import (
+    retry_job,
+    retry_rate_limited_message,
+    retry_reply_extraction,
+)
 
 
 def register_retry_routes(
@@ -37,6 +41,20 @@ def register_retry_routes(
                 raise HTTPException(404, "Message not found")
             try:
                 job = retry_rate_limited_message(session, message, actor, clock.now())
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            return {"job_id": job.id, "status": job.status}
+
+    @app.post("/api/v1/messages/{message_id}/retry-extraction", status_code=202)
+    def retry_extraction(message_id: str, actor: str = Depends(authorized)) -> dict:
+        with factory.begin() as session:
+            message = session.scalar(
+                select(MessageRow).where(MessageRow.id == message_id).with_for_update()
+            )
+            if message is None:
+                raise HTTPException(404, "Message not found")
+            try:
+                job = retry_reply_extraction(session, message, actor, clock.now())
             except ValueError as exc:
                 raise HTTPException(409, str(exc)) from exc
             return {"job_id": job.id, "status": job.status}

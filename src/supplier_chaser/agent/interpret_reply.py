@@ -23,6 +23,12 @@ def supports_date(quote: str, value: date) -> bool:
         re.IGNORECASE,
     ):
         return True
+    # CJK dates: 2026年12月2日 (zh/ja) and 2026년 12월 2일 (ko).
+    if re.search(
+        rf"(?<!\d){value.year}\s*[年년]\s*0?{value.month}\s*[月월]\s*0?{value.day}\s*[日일](?!\d)",
+        quote,
+    ):
+        return True
     months = (
         "January February March April May June July August September October November December"
     ).split()
@@ -36,17 +42,38 @@ def supports_date(quote: str, value: date) -> bool:
     )
 
 
-def source_quote(text: str, quote: str) -> str:
+def _span(text: str, quote: str, start: int = 0) -> re.Match[str] | None:
+    # PDF line wrapping may differ; restore the original span rather than accepting paraphrases.
+    pattern = r"\s+".join(re.escape(token) for token in quote.split())
+    matches = list(re.finditer(pattern, text))
+    return matches[0] if len(matches) == 1 and matches[0].start() >= start else None
+
+
+def source_quote(text: str, quote: str, *, segments: bool = False) -> str:
     if not quote.strip():
         raise ValueError("Extraction lacks a verbatim source quote")
     if quote in text:
         return quote
-    # PDF line wrapping may differ; restore the original span rather than accepting paraphrases.
-    pattern = r"\s+".join(re.escape(token) for token in quote.split())
-    matches = list(re.finditer(pattern, text))
-    if len(matches) != 1:
+    whole = _span(text, quote)
+    if whole:
+        return whole.group()
+    if not segments:
         raise ValueError("Extraction lacks a verbatim source quote")
-    return matches[0].group()
+    # Replies concern one order line, so non-adjacent sentences may be joined; document rows
+    # may not, since joining rows could pair one item's part number with another's quantity.
+    spans: list[str] = []
+    position = 0
+    for part in re.split(r"\n\s*\n", quote):
+        if not part.strip():
+            continue
+        match = _span(text, part, position)
+        if match is None:
+            raise ValueError("Extraction lacks a verbatim source quote")
+        spans.append(match.group())
+        position = match.end()
+    if len(spans) < 2:
+        raise ValueError("Extraction lacks a verbatim source quote")
+    return "\n\n".join(spans)
 
 
 def quantities_in_quote(quote: str) -> set[Decimal]:
@@ -71,17 +98,37 @@ def quantities_in_quote(quote: str) -> set[Decimal]:
 CURRENCY_CODES = frozenset("USD EUR GBP CHF PLN CNY RMB INR KRW JPY CAD AUD HKD SGD".split())
 
 
-def validate_quantity_unit(unit: str | None, quote: str) -> None:
+def _mentions_unit(quote: str, word: str) -> bool:
+    # CJK units attach directly to digits ("460,000件"), so word boundaries apply to Latin only.
+    pattern = (
+        re.escape(word) if not word.isascii() else r"(?<![a-z])" + re.escape(word) + r"(?![a-z])"
+    )
+    return bool(re.search(pattern, quote, re.IGNORECASE))
+
+
+UNIT_ALIASES = {
+    "PC": ("pc", "pcs", "piece", "pieces", "unit", "units", "szt", "sztuk", "件", "个", "개")
+}
+
+
+def validate_quantity_unit(unit: str | None, quote: str) -> str | None:
+    """Return the canonical unit code once the quote evidences the unit."""
     if unit is None:
-        return
+        return None
     if unit.upper() in CURRENCY_CODES:
         raise ValueError("Currency is not a quantity unit")
-    aliases = {
-        "PC": ("pc", "pcs", "piece", "pieces", "unit", "units", "szt", "sztuk", "件", "个", "개")
-    }
-    words = aliases.get(unit.upper(), (unit,))
-    if not any(re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", quote, re.I) for word in words):
+    canonical = next(
+        (
+            code
+            for code, words in UNIT_ALIASES.items()
+            if unit.casefold() in (code.casefold(), *words)
+        ),
+        unit,
+    )
+    words = UNIT_ALIASES.get(canonical, (unit,))
+    if not any(_mentions_unit(quote, word) for word in words):
         raise ValueError("Quantity unit lacks source evidence")
+    return canonical
 
 
 def extract_validated(extractor: LLMExtractor, text: str) -> Confirmation:
@@ -89,9 +136,11 @@ def extract_validated(extractor: LLMExtractor, text: str) -> Confirmation:
         try:
             result = extractor.extract_confirmation(text)
             result = result.model_copy(
-                update={"evidence_quote": source_quote(text, result.evidence_quote)}
+                update={"evidence_quote": source_quote(text, result.evidence_quote, segments=True)}
             )
-            validate_quantity_unit(result.unit, result.evidence_quote)
+            result = result.model_copy(
+                update={"unit": validate_quantity_unit(result.unit, result.evidence_quote)}
+            )
             for delivery in result.deliveries:
                 if delivery.quantity not in quantities_in_quote(result.evidence_quote):
                     raise ValueError("Extracted quantity is not supported by the quoted span")

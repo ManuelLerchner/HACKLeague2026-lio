@@ -7,12 +7,13 @@ from email.message import EmailMessage
 from email.parser import BytesParser
 from email.utils import getaddresses, parsedate_to_datetime
 
+from supplier_chaser.communications.mail_auth import authenticate_sender
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.models import Inbound, Outbound, SendResult
 from supplier_chaser.ingestion.parse import plain_html
 
 
-def parse_mail(raw: bytes) -> Inbound:
+def parse_mail(raw: bytes, trusted_authserv_id: str = "") -> Inbound:
     message = BytesParser(policy=policy.default).parsebytes(raw)
     if not isinstance(message, EmailMessage):
         raise ValueError("Invalid email")
@@ -26,15 +27,19 @@ def parse_mail(raw: bytes) -> Inbound:
     received = parsedate_to_datetime(str(message["Date"])) if message["Date"] else datetime.now(UTC)
     if received.tzinfo is None:
         raise ValueError("Email date has no timezone")
+    sender = senders[0][1].lower()
+    failure = authenticate_sender(message, sender, trusted_authserv_id)
     return Inbound(
         external_id=str(message["Message-ID"]),
-        sender=senders[0][1].lower(),
+        sender=sender,
         recipients=[address.lower() for _, address in getaddresses(message.get_all("To", []))],
         subject=str(message.get("Subject", "")),
         body=body,
         received_at=received,
         in_reply_to=str(message["In-Reply-To"]) if message["In-Reply-To"] else None,
         references=str(message.get("References", "")).split(),
+        identity_verified=failure is None,
+        authentication=failure or "DKIM/DMARC pass aligned with sender domain",
     )
 
 
@@ -91,5 +96,5 @@ class SMTPIMAPGateway:
                     if isinstance(part, tuple):
                         if len(part[1]) > settings.max_file_bytes:
                             raise ValueError("Email exceeds byte limit")
-                        messages.append(parse_mail(part[1]))
+                        messages.append(parse_mail(part[1], settings.trusted_authserv_id))
         return messages

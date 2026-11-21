@@ -133,10 +133,10 @@ class Worker:
                 )
             elif job.job_type == "review_reply":
                 from supplier_chaser.adapters.db import MessageRow
+                from supplier_chaser.communications.receive import identity_established
 
                 row = session.get(MessageRow, payload["message_id"])
-                review = row.metadata_json.get("buyer_review") if row else None
-                if not row or not review or not review["request"]["identity_verified"]:
+                if not row or not identity_established(row):
                     raise ValueError("Reply requires a recorded identity verification")
                 interpret_stored_reply(session, row, self.extractor, now)
             elif job.job_type == "apply_mapping":

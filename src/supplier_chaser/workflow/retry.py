@@ -7,7 +7,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from supplier_chaser.adapters.db import CaseRow, JobRow, MessageRow
-from supplier_chaser.cases.service import move
+from supplier_chaser.cases.service import move, record_event
+from supplier_chaser.communications.receive import identity_established
 from supplier_chaser.domain.models import State
 from supplier_chaser.workflow.events import append_event
 from supplier_chaser.workflow.jobs import enqueue
@@ -88,5 +89,48 @@ def retry_rate_limited_message(
         "send",
         {"case_id": case.id, "message_id": message.id},
         f"send-rate-recovery:{message.id}",
+        now,
+    )
+
+
+def can_retry_extraction(message: MessageRow) -> bool:
+    return bool(
+        message.direction == "inbound"
+        and message.status == "needs_review"
+        and message.metadata_json.get("extraction_error")
+        and not message.metadata_json.get("extraction")
+        and identity_established(message)
+    )
+
+
+def retry_reply_extraction(
+    session: Session, message: MessageRow, actor: str, now: datetime
+) -> JobRow:
+    """Re-run extraction for an identity-established reply; identity is not re-decided."""
+    case = session.scalar(select(CaseRow).where(CaseRow.id == message.case_id).with_for_update())
+    if case is None or case.active_key is None or not can_retry_extraction(message):
+        raise ValueError("Only a verified reply whose extraction failed can be retried.")
+    attempt = message.metadata_json.get("extraction_retries", 0) + 1
+    record_event(
+        session,
+        case,
+        "message.extraction_retry_requested",
+        {
+            "message_id": message.id,
+            "by": actor,
+            "reason": "Previous error: " + message.metadata_json["extraction_error"],
+        },
+        now,
+    )
+    message.metadata_json = {
+        **{k: v for k, v in message.metadata_json.items() if k != "extraction_error"},
+        "extraction_retries": attempt,
+    }
+    message.status = "review_queued"
+    return enqueue(
+        session,
+        "review_reply",
+        {"case_id": case.id, "message_id": message.id},
+        f"review-reply:{message.id}:retry:{attempt}",
         now,
     )

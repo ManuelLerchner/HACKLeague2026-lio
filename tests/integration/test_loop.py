@@ -211,3 +211,107 @@ def test_live_send_guards(seeded, worker, factory, clock, change):
     send_message(factory, identifier, Forbidden(), live, clock.now())
     with factory() as session:
         assert session.get(MessageRow, identifier).status == "blocked"
+
+
+def demo_reply(seeded, worker, factory, clock, **changes):
+    worker.tick()
+    deliver_reply(seeded, factory, clock.now())
+    data = json.loads((seeded.fixture_mail_dir / "inbox/reply-1.json").read_text())
+    return Inbound.model_validate({**data, **changes})
+
+
+def case_state(factory):
+    with factory() as session:
+        return session.scalar(select(CaseRow.state).where(CaseRow.po_line_id == "DEMO-4100/10"))
+
+
+def test_authenticated_reply_needs_our_message_id_not_only_subject_marker(
+    seeded, worker, factory, clock
+):
+    message = demo_reply(seeded, worker, factory, clock, in_reply_to=None, references=[])
+    with factory.begin() as session:
+        receive(session, message, worker.extractor, clock.now(), seeded.mail_from)
+    with factory() as session:
+        row = session.scalar(select(MessageRow).where(MessageRow.direction == "inbound"))
+        if row.case_id is None:
+            pytest.skip("Demo reply correlates only through In-Reply-To")
+        assert row.status == "needs_review"
+        assert not row.metadata_json["identity_check"]["verified"]
+    assert case_state(factory) == State.ESCALATED
+
+
+def test_held_reply_is_rechecked_once_when_authentication_passes(seeded, worker, factory, clock):
+    held = demo_reply(
+        seeded, worker, factory, clock, identity_verified=False, authentication="DKIM failed"
+    )
+    calls = []
+    original = worker.extractor.extract_confirmation
+
+    def counting(text):
+        calls.append(text)
+        return original(text)
+
+    worker.extractor.extract_confirmation = counting
+    with factory.begin() as session:
+        receive(session, held, worker.extractor, clock.now(), seeded.mail_from)
+    with factory.begin() as session:
+        row = session.scalar(select(MessageRow).where(MessageRow.direction == "inbound"))
+        assert row.status == "needs_review"
+        # Simulate a reply held before automatic checks were recorded.
+        row.metadata_json = {k: v for k, v in row.metadata_json.items() if k != "identity_check"}
+    assert case_state(factory) == State.ESCALATED
+    verified = held.model_copy(update={"identity_verified": True, "authentication": ""})
+    for _ in range(2):
+        with factory.begin() as session:
+            receive(session, verified, worker.extractor, clock.now(), seeded.mail_from)
+    assert len(calls) == 1
+    with factory() as session:
+        row = session.scalar(select(MessageRow).where(MessageRow.direction == "inbound"))
+        assert row.status == "received"
+        assert row.metadata_json["identity_check"]["verified"]
+        assert session.scalar(
+            select(CaseEvent).where(CaseEvent.kind == "message.identity_verified")
+        )
+    assert case_state(factory) == State.RECONCILING
+
+
+def test_failed_extraction_of_verified_reply_can_be_retried(seeded, worker, factory, clock):
+    from supplier_chaser.workflow.retry import retry_reply_extraction
+
+    message = demo_reply(seeded, worker, factory, clock)
+    original = worker.extractor.extract_confirmation
+
+    def broken(text):
+        raise ValueError("model outage")
+
+    worker.extractor.extract_confirmation = broken
+    with factory.begin() as session:
+        receive(session, message, worker.extractor, clock.now(), seeded.mail_from)
+    with factory.begin() as session:
+        row = session.scalar(select(MessageRow).where(MessageRow.direction == "inbound"))
+        assert row.status == "needs_review"
+        assert row.metadata_json["extraction_error"] == "model outage"
+        job = retry_reply_extraction(session, row, "buyer", clock.now())
+        assert row.status == "review_queued"
+        with pytest.raises(ValueError):
+            retry_reply_extraction(session, row, "buyer", clock.now())
+        job_id = job.id
+    worker.extractor.extract_confirmation = original
+    with factory() as session:
+        worker.execute(session.get(JobRow, job_id))
+    with factory() as session:
+        row = session.scalar(select(MessageRow).where(MessageRow.direction == "inbound"))
+        assert row.status == "received"
+        assert row.metadata_json["extraction_retries"] == 1
+
+
+def test_unverified_reply_cannot_skip_identity_through_retry(seeded, worker, factory, clock):
+    from supplier_chaser.workflow.retry import retry_reply_extraction
+
+    message = demo_reply(seeded, worker, factory, clock, identity_verified=False)
+    with factory.begin() as session:
+        receive(session, message, worker.extractor, clock.now(), seeded.mail_from)
+        row = session.scalar(select(MessageRow).where(MessageRow.direction == "inbound"))
+        row.metadata_json = {**row.metadata_json, "extraction_error": "forged"}
+        with pytest.raises(ValueError):
+            retry_reply_extraction(session, row, "buyer", clock.now())

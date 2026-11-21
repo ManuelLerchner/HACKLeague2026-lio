@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from supplier_chaser.adapters.db import CaseRow, MessageRow, PORow
 from supplier_chaser.adapters.repositories import CommitmentRepository
-from supplier_chaser.agent.interpret_reply import extract_validated
+from supplier_chaser.agent.interpret_reply import extract_validated, source_quote
 from supplier_chaser.cases.service import move, record_event
 from supplier_chaser.communications.correlation import correlate
 from supplier_chaser.domain.models import Inbound, State
@@ -22,14 +22,16 @@ def receive(
     content_hash = hashlib.sha256(
         (message.sender.lower() + "\n" + message.body.strip()).encode()
     ).hexdigest()
-    if session.scalar(
+    existing = session.scalar(
         select(MessageRow).where(
             or_(
                 MessageRow.external_message_id == message.external_id,
                 MessageRow.content_hash == content_hash,
             )
         )
-    ):
+    )
+    if existing:
+        recheck_held_identity(session, existing, message, extractor, now)
         return
     outbound = session.execute(
         select(MessageRow, CaseRow, PORow)
@@ -68,6 +70,23 @@ def receive(
     case = session.scalar(select(CaseRow).where(CaseRow.id == candidate).with_for_update())
     assert case is not None
     record_event(session, case, "message.received", {"message_id": row.id}, now)
+    supersede_drafts(session, case, now)
+    failure = record_identity_check(session, row, message)
+    if failure:
+        row.status = "needs_review"
+        if case.active_key is not None:
+            move(
+                session,
+                case,
+                State.ESCALATED,
+                now,
+                f"Sender identity unverified: {failure}. Review identity",
+            )
+        return
+    interpret_stored_reply(session, row, extractor, now)
+
+
+def supersede_drafts(session: Session, case: CaseRow, now: datetime) -> None:
     stale_drafts = list(
         session.scalars(
             select(MessageRow).where(
@@ -90,18 +109,75 @@ def receive(
             },
             now,
         )
+
+
+def identity_failure(session: Session, message: Inbound, case_id: str) -> str | None:
+    """Correlation already pins the sender to the supplier address we wrote to."""
     if not message.identity_verified:
-        row.status = "needs_review"
-        if case.active_key is not None:
-            move(
-                session,
-                case,
-                State.ESCALATED,
-                now,
-                "Sender authentication is unverified; review identity",
+        return message.authentication or "Sender authentication is unverified"
+    # A subject marker is copyable; only our own Message-ID proves a reply to our inquiry.
+    references = set(message.references) | ({message.in_reply_to} if message.in_reply_to else set())
+    sent = set(
+        session.scalars(
+            select(MessageRow.external_message_id).where(
+                MessageRow.case_id == case_id,
+                MessageRow.direction == "outbound",
+                MessageRow.status == "sent",
             )
+        )
+    )
+    if not references & sent:
+        return "Reply does not reference an inquiry sent on this case"
+    return None
+
+
+def record_identity_check(session: Session, row: MessageRow, message: Inbound) -> str | None:
+    assert row.case_id is not None
+    failure = identity_failure(session, message, row.case_id)
+    row.metadata_json = {
+        **row.metadata_json,
+        "identity_check": {
+            "verified": failure is None,
+            "reason": failure or "Authenticated sender replied to our inquiry on this case",
+        },
+    }
+    return failure
+
+
+def recheck_held_identity(
+    session: Session, row: MessageRow, message: Inbound, extractor: LLMExtractor, now: datetime
+) -> None:
+    """Evaluate replies held before automatic checks existed, once, on the next mailbox poll."""
+    if (
+        row.direction != "inbound"
+        or row.status != "needs_review"
+        or row.case_id is None
+        or row.external_message_id != message.external_id
+        or row.sender != message.sender
+        or {"identity_check", "buyer_review", "extraction"} & row.metadata_json.keys()
+    ):
         return
+    case = session.scalar(select(CaseRow).where(CaseRow.id == row.case_id).with_for_update())
+    if case is None or record_identity_check(session, row, message):
+        return
+    record_event(
+        session,
+        case,
+        "message.identity_verified",
+        {"message_id": row.id, "reason": row.metadata_json["identity_check"]["reason"]},
+        now,
+    )
+    supersede_drafts(session, case, now)
     interpret_stored_reply(session, row, extractor, now)
+
+
+def identity_established(row: MessageRow) -> bool:
+    review = row.metadata_json.get("buyer_review")
+    if review:
+        return bool(
+            review["request"]["decision"] == "verify" and review["request"]["identity_verified"]
+        )
+    return bool(row.metadata_json.get("identity_check", {}).get("verified"))
 
 
 def interpret_stored_reply(
@@ -131,7 +207,10 @@ def interpret_stored_reply(
             + "\nExtract only from the original supplier reply below.\n"
             + row.body,
         )
-        if confirmation.evidence_quote not in row.body:
+        if (
+            source_quote(row.body, confirmation.evidence_quote, segments=True)
+            != confirmation.evidence_quote
+        ):
             raise ValueError("Reply evidence must come from the original message")
         if (confirmation.supplier_id, confirmation.po_number, confirmation.line_number) != (
             po.supplier_id,
@@ -166,13 +245,14 @@ def interpret_stored_reply(
             case.next_action_at = None
         record_event(session, case, "commitment.claim_extracted", {"message_id": row.id}, now)
         enqueue(session, "reconcile", {"po_line_id": case.po_line_id}, f"reply:{row.id}", now)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as exc:
         row.status = "needs_review"
+        row.metadata_json = {**row.metadata_json, "extraction_error": str(exc)}
         if case.active_key is not None:
             move(
                 session,
                 case,
                 State.ESCALATED,
                 now,
-                "Ambiguous or invalid reply; manual review required",
+                f"Reply could not be validated ({exc}); manual review required",
             )
