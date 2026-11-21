@@ -9,6 +9,7 @@ from supplier_chaser.domain.models import (
     POLine,
 )
 from supplier_chaser.domain.policies import LAUNCH_CUTOFF, priority
+from supplier_chaser.domain.units import canonical_unit
 
 
 def reconcile(
@@ -75,7 +76,7 @@ def reconcile(
     if (
         confirmation.intent != "confirmed"
         or not confirmation.deliveries
-        or confirmation.unit != po.unit
+        or canonical_unit(confirmation.unit) != canonical_unit(po.unit)
         or any(d.day is None for d in confirmation.deliveries)
         or set(confirmation.risks) - set(latest.acknowledged_risks)
         or (bool(confirmation.terms.strip()) and not latest.baseline_terms_verified)

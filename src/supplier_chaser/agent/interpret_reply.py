@@ -3,6 +3,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from supplier_chaser.domain.models import Confirmation
+from supplier_chaser.domain.units import UNIT_ALIASES, canonical_unit
 from supplier_chaser.ports.llm import LLMExtractor
 
 PROMPT_VERSION = "confirmation-v1"
@@ -106,25 +107,13 @@ def mentions_unit(quote: str, word: str) -> bool:
     return bool(re.search(pattern, quote, re.IGNORECASE))
 
 
-UNIT_ALIASES = {
-    "PC": ("pc", "pcs", "piece", "pieces", "unit", "units", "szt", "sztuk", "件", "个", "개")
-}
-
-
 def validate_quantity_unit(unit: str | None, quote: str) -> str | None:
     """Return the canonical unit code once the quote evidences the unit."""
     if unit is None:
         return None
     if unit.upper() in CURRENCY_CODES:
         raise ValueError("Currency is not a quantity unit")
-    canonical = next(
-        (
-            code
-            for code, words in UNIT_ALIASES.items()
-            if unit.casefold() in (code.casefold(), *words)
-        ),
-        unit,
-    )
+    canonical = canonical_unit(unit) or unit
     words = UNIT_ALIASES.get(canonical, (unit,))
     if not any(mentions_unit(quote, word) for word in words):
         raise ValueError("Quantity unit lacks source evidence")

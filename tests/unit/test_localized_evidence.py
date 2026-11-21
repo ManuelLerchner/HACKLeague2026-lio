@@ -66,3 +66,12 @@ def test_cjk_dates_and_canonical_units():
     assert validate_quantity_unit("pieces", "460,000 pieces") == "PC"
     assert validate_quantity_unit("件", "460,000件") == "PC"
     assert validate_quantity_unit("KG", "40 KG") == "KG"
+
+
+def test_stored_unit_words_compare_as_codes():
+    from supplier_chaser.domain.units import canonical_unit
+
+    assert canonical_unit("pieces") == canonical_unit("PC") == "PC"
+    assert canonical_unit("sztuk") == "PC"
+    assert canonical_unit("KG") == "KG"
+    assert canonical_unit(None) is None
