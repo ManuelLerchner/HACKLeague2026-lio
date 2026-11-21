@@ -13,6 +13,7 @@ from supplier_chaser.agent.interpret_reply import (
     validate_quantity_unit,
 )
 from supplier_chaser.cases.service import move, reconcile_line
+from supplier_chaser.communications.receive import supersede_drafts
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.documents import DocumentItems
 from supplier_chaser.domain.models import Confirmation, Delivery, POLine, State
@@ -298,6 +299,13 @@ def investigate_document(
                 if case.state in {State.NEW, State.ESCALATED}:
                     try:
                         with session.begin_nested():
+                            # An older draft predates this evidence and would block the new one.
+                            supersede_drafts(
+                                session,
+                                case,
+                                now,
+                                "Superseded by a draft from new document evidence",
+                            )
                             move(
                                 session,
                                 case,

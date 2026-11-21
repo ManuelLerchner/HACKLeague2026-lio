@@ -86,7 +86,12 @@ def receive(
     interpret_stored_reply(session, row, extractor, now)
 
 
-def supersede_drafts(session: Session, case: CaseRow, now: datetime) -> None:
+def supersede_drafts(
+    session: Session,
+    case: CaseRow,
+    now: datetime,
+    reason: str = "Supplier reply received; review it before another inquiry",
+) -> None:
     stale_drafts = list(
         session.scalars(
             select(MessageRow).where(
@@ -105,7 +110,7 @@ def supersede_drafts(session: Session, case: CaseRow, now: datetime) -> None:
             "message.drafts_superseded",
             {
                 "message_ids": [draft.id for draft in stale_drafts],
-                "reason": "Supplier reply received; review it before another inquiry",
+                "reason": reason,
             },
             now,
         )

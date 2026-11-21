@@ -33,6 +33,7 @@ from supplier_chaser.adapters.db import (
 )
 from supplier_chaser.cases.service import move, record_event
 from supplier_chaser.clock import Clock, SystemClock
+from supplier_chaser.communications.receive import supersede_drafts
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.models import State
 from supplier_chaser.ingestion.document_review import claim_review_context
@@ -410,12 +411,9 @@ def create_app(
                     409, "Review the held supplier reply before drafting another inquiry"
                 )
             if case.state in {State.ESCALATED, State.BLOCKED}:
-                for stale in session.scalars(
-                    select(MessageRow).where(
-                        MessageRow.case_id == case.id, MessageRow.status == "draft"
-                    )
-                ):
-                    stale.status = "superseded"
+                supersede_drafts(
+                    session, case, clock.now(), "Buyer requested an updated clarification"
+                )
                 session.flush()
                 move(
                     session,

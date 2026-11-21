@@ -34,3 +34,15 @@ def test_changed_or_commercial_terms_never_match():
     assert "commercial" in baseline_mismatch("FOB Yantian, release after deposit", CONTRACT)
     assert baseline_mismatch("Delivery as usual", CONTRACT) is not None
     assert covering_passage("Deliveries FOB Busan.", {"FOB yantian"}) is None
+
+
+def test_line_status_ignores_siblings_and_absent_items():
+    from supplier_chaser.agent.discover import line_status
+
+    def finding(attribution):
+        return {"attribution": attribution, "reason": attribution}
+
+    assert line_status([finding("matched")])["status"] == "complete"
+    assert line_status([finding("unmatched")])["status"] == "not_covered"
+    assert line_status([finding("ambiguous")])["status"] == "ambiguous"
+    assert line_status([finding("matched"), finding("ambiguous")])["status"] == "ambiguous"
