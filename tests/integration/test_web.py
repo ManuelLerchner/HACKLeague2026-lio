@@ -68,4 +68,8 @@ def test_held_reply_explains_manual_action_and_recheck_limits(seeded, factory, c
         assert "Sender authentication is unverified" in response.text
         assert "Reply received, awaiting review" in response.text
         assert "only evaluates evidence already imported" in response.text
-        assert "no in-app control" in response.text
+        assert (
+            "Verify identity &amp; process reply" in response.text
+            or "Verify identity & process reply" in response.text
+        )
+        assert 'name="identity_verified"' in response.text

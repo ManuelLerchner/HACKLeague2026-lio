@@ -20,6 +20,7 @@ def create_draft(
     settings: Settings,
     now: datetime,
     reminder: bool = False,
+    require_approval: bool = False,
 ) -> None:
     case = session.scalar(select(CaseRow).where(CaseRow.id == case_id).with_for_update())
     if case is None or case.active_key is None or case.state in {State.ESCALATED, State.BLOCKED}:
@@ -74,8 +75,13 @@ def create_draft(
     move(session, case, State.DRAFT_READY, now, "Factual supplier question prepared")
     record_event(session, case, "message.draft_ready", {"message_id": message_id}, now)
     # Only deterministic, bounded templates qualify for automatic delivery.
-    if isinstance(drafter, FixtureLLM) and (
-        settings.mail_mode == "fixture" or (settings.outbound_mail_enabled and not settings.dry_run)
+    if (
+        not require_approval
+        and isinstance(drafter, FixtureLLM)
+        and (
+            settings.mail_mode == "fixture"
+            or (settings.outbound_mail_enabled and not settings.dry_run)
+        )
     ):
         row.status = "queued"
         enqueue(

@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from supplier_chaser.adapters.db import CaseRow, PORow
+from supplier_chaser.adapters.db import CaseRow, MessageRow, PORow
 from supplier_chaser.adapters.repositories import CommitmentRepository
 from supplier_chaser.cases.state_machine import transition
 from supplier_chaser.commitments.reconcile import reconcile
@@ -60,6 +60,17 @@ def reconcile_line(session: Session, line_id: str, settings: Settings, now: date
             select(CaseRow).where(CaseRow.po_line_id == line_id, CaseRow.active_key.is_not(None))
         )
     )
+    # Periodic refresh must not close a case while its new supplier evidence is held.
+    if session.scalar(
+        select(MessageRow.id)
+        .where(
+            MessageRow.case_id.in_([case.id for case in active]),
+            MessageRow.direction == "inbound",
+            MessageRow.status.in_(["needs_review", "review_queued"]),
+        )
+        .limit(1)
+    ):
+        return
     if assessment.status == "UNKNOWN":
         if not active:
             key = f"{po.supplier_id}:{line_id}:CONTRADICTORY_EVIDENCE"

@@ -1,10 +1,27 @@
 import re
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from supplier_chaser.domain.models import Confirmation
 from supplier_chaser.ports.llm import LLMExtractor
 
 PROMPT_VERSION = "confirmation-v1"
+
+
+def supports_date(quote: str, value: date) -> bool:
+    if re.search(r"(?<!\d)" + re.escape(value.isoformat()) + r"(?!\d)", quote):
+        return True
+    months = (
+        "January February March April May June July August September October November December"
+    ).split()
+    month = months[value.month - 1]
+    return bool(
+        re.search(
+            rf"(?<!\w)0?{value.day}\s+(?:{month}|{month[:3]})\s+{value.year}(?!\d)",
+            quote,
+            re.IGNORECASE,
+        )
+    )
 
 
 def source_quote(text: str, quote: str) -> str:
@@ -41,12 +58,11 @@ def extract_validated(extractor: LLMExtractor, text: str) -> Confirmation:
                         continue
                 if delivery.quantity not in quantities:
                     raise ValueError("Extracted quantity is not supported by the quoted span")
-                if (
-                    delivery.promised_date
-                    and delivery.promised_date.isoformat() not in result.evidence_quote
+                if delivery.promised_date and not supports_date(
+                    result.evidence_quote, delivery.promised_date
                 ):
                     raise ValueError(
-                        "Extracted date requires an unambiguous ISO date in the quoted span"
+                        "Extracted date requires an unambiguous supported date in the quoted span"
                     )
                 if (
                     delivery.promised_at
@@ -66,6 +82,8 @@ def extract_validated(extractor: LLMExtractor, text: str) -> Confirmation:
                     "price increase",
                     "accept terms",
                     "payment details",
+                    "release is pending",
+                    "exw",
                 )
             ):
                 result = result.model_copy(
