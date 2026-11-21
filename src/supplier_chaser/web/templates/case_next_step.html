@@ -13,7 +13,7 @@
 <li><strong>Waiting on:</strong> {{ 'The worker to process the action.' if status.worker_healthy else 'The worker to come online. Work cannot progress while it is offline.' }}</li>
 <li><strong>Afterwards:</strong> Review the result or draft shown here. Processing alone does not guarantee resolution.</li>
 {% elif retryable %}
-<li><strong>Your action:</strong> Retry extraction of the verified reply. Its last attempt failed: {{ retryable[0].extraction_error }}</li>
+<li><strong>Your action:</strong> Retry extraction of the verified reply. Its last attempt failed{% if retryable[0].extraction_error %}: {{ retryable[0].extraction_error }}{% else %} under an older extractor{% endif %}.</li>
 <li><strong>Blocked on:</strong> A new extraction attempt. Waiting alone will not progress this case.</li>
 <li><strong>Afterwards:</strong> The worker extracts the reply and rechecks the commitment.</li>
 {% elif held %}

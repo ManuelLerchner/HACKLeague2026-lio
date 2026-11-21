@@ -97,7 +97,7 @@ def can_retry_extraction(message: MessageRow) -> bool:
     return bool(
         message.direction == "inbound"
         and message.status == "needs_review"
-        and message.metadata_json.get("extraction_error")
+        # Failures from before errors were recorded carry no reason, so its absence is not a bar.
         and not message.metadata_json.get("extraction")
         and identity_established(message)
     )
@@ -109,7 +109,7 @@ def retry_reply_extraction(
     """Re-run extraction for an identity-established reply; identity is not re-decided."""
     case = session.scalar(select(CaseRow).where(CaseRow.id == message.case_id).with_for_update())
     if case is None or case.active_key is None or not can_retry_extraction(message):
-        raise ValueError("Only a verified reply whose extraction failed can be retried.")
+        raise ValueError("Only a verified reply without a validated extraction can be retried.")
     attempt = message.metadata_json.get("extraction_retries", 0) + 1
     record_event(
         session,
@@ -118,7 +118,8 @@ def retry_reply_extraction(
         {
             "message_id": message.id,
             "by": actor,
-            "reason": "Previous error: " + message.metadata_json["extraction_error"],
+            "reason": "Previous error: "
+            + message.metadata_json.get("extraction_error", "not recorded"),
         },
         now,
     )
