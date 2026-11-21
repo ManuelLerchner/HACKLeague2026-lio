@@ -23,6 +23,10 @@ class CommitmentRepository:
         rows = self.session.scalars(select(ClaimRow).where(ClaimRow.po_line_id == line_id))
         po = self.session.get(PORow, line_id)
         master_unit = self.master_unit(po.part_number) if po else None
+        from supplier_chaser.commitments.checks import terms_checks, terms_verified
+        from supplier_chaser.ingestion.references import terms_reference
+
+        reference = terms_reference(self.session, line_id)
         claims = []
         for r in rows:
             confirmation = Confirmation.model_validate(r.data)
@@ -37,6 +41,8 @@ class CommitmentRepository:
             ):
                 confirmation = confirmation.model_copy(update={"unit": canonical_unit(master_unit)})
                 unit_source = MATERIAL_MASTER_PATH
+            review = self._buyer_review(r)
+            checks = terms_checks(confirmation, reference)
             claims.append(
                 Claim(
                     id=r.id,
@@ -45,7 +51,13 @@ class CommitmentRepository:
                     source_kind="file" if r.source_fact_id else "message",
                     confirmation=confirmation,
                     unit_source=unit_source,
-                    **self._buyer_review(r),
+                    checks=checks,
+                    **{
+                        **review,
+                        # A buyer's recorded review stands; otherwise the rules decide.
+                        "baseline_terms_verified": review.get("baseline_terms_verified")
+                        or terms_verified(confirmation, checks),
+                    },
                 )
             )
         return claims

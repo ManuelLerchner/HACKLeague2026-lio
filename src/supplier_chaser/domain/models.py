@@ -116,6 +116,20 @@ class Confirmation(Value):
         return sum((d.quantity for d in self.deliveries), Decimal(0))
 
 
+class Check(Value):
+    """One rule applied to a supplier assertion against our reference data."""
+
+    name: str
+    status: Literal["pass", "fail", "unknown"]
+    detail: str
+    sources: list[str] = []
+    # The buyer decision a failure turns into; a pass or unknown needs none.
+    decision: (
+        Literal["terms_conflict", "agreement_expiry", "supplier_qualification", "proposed_change"]
+        | None
+    ) = None
+
+
 class Claim(Value):
     id: str
     evidence_id: str
@@ -125,6 +139,7 @@ class Claim(Value):
     baseline_terms_verified: bool = False
     acknowledged_risks: list[str] = []
     unit_source: str | None = None
+    checks: list[Check] = []
 
 
 class Discrepancy(Value):

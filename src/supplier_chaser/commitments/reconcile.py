@@ -73,6 +73,13 @@ def reconcile(
         return Assessment(status="DISCREPANCY", issues=[conflict], reason=conflict.explanation)
     latest = active[0]
     confirmation = latest.confirmation
+    failed = [check for check in latest.checks if check.status == "fail"]
+    if failed:
+        return Assessment(
+            status="UNKNOWN",
+            reason="Needs a buyer decision: " + " ".join(check.detail for check in failed),
+            latest_claim=latest,
+        )
     if (
         confirmation.intent != "confirmed"
         or not confirmation.deliveries

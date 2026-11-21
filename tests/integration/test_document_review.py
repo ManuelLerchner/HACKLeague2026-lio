@@ -244,7 +244,7 @@ def reply_claim(session, now, risks):
     return session.scalar(select(ClaimRow))
 
 
-def test_prefilled_baseline_and_acknowledged_flag_resolve_reply_claim(settings, factory, clock):
+def test_rules_verify_terms_and_acknowledged_flag_resolves_reply_claim(settings, factory, clock):
     from supplier_chaser.ingestion.document_review import claim_review_context
 
     with factory.begin() as session:
@@ -258,17 +258,19 @@ def test_prefilled_baseline_and_acknowledged_flag_resolve_reply_claim(settings, 
             clock.now(),
         )
         assert before.status == "UNKNOWN"
+        # The agreement states FOB Busan, so the rules verify the terms without a buyer.
+        assert before.latest_claim.baseline_terms_verified
+        incoterm = next(c for c in before.latest_claim.checks if c.name == "incoterm")
+        assert incoterm.status == "pass" and contract.source_file_id in {
+            session.scalar(select(SourceFile.id).where(SourceFile.path == path))
+            for path in incoterm.sources
+        }
         context = claim_review_context(session, before.latest_claim.model_dump(mode="json"))
-        suggestion = context["suggestion"]
-        assert suggestion["fact_id"] == contract.id
-        assert "FOB Busan" in suggestion["quote"]
+        assert not context["terms"] and context["suggestion"] is None
         assert list(context["acknowledgeable"]) == ["contract"] and not context["blocking"]
         review = ClaimReview(
             reviewer="Buyer",
             note="Supplier restates the framework agreement; no change.",
-            baseline_terms_evidence=EvidenceReference(
-                fact_id=suggestion["fact_id"], quote=suggestion["quote"]
-            ),
             acknowledged_risks=["contract"],
         )
         review_claim(session, claim.id, review, "admin", clock.now())
