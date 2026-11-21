@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Supplier Chaser · Soony procurement</title>
+<link rel="stylesheet" href="/static/app.css">
+<meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false,"historyCacheSize":0}'>
+<script defer src="/static/htmx.min.js"></script><script defer src="/static/app.js"></script>
+<meta name="csrf-token" content="{{ request.session.get('csrf', '') }}"></head>
+<body>
+<aside class="sidebar"><a class="brand" href="/"><span class="brand-mark">s<span>c</span></span>Supplier<br>Chaser</a>
+<div class="workspace">SOONY / PROCUREMENT</div>
+<nav><a href="/" class="{{ 'selected' if request.url.path == '/' else '' }}">◫ &nbsp; Case inbox</a><a href="/system" class="{{ 'selected' if request.url.path == '/system' else '' }}">◎ &nbsp; System status</a></nav>
+<div class="sidebar-bottom"><span class="dot"></span> Evidence before action<br><small>Launch · 22 Nov, 20:00 CET</small></div></aside>
+<main><header class="topbar"><span>COMMITMENT OPERATIONS</span><div><span class="mode">{{ (status.mode if status else 'private workspace') | upper }}</span><span class="avatar">SB</span></div></header>
+{% block content %}{% endblock %}
+<footer>Supplier commitments are claims. Physical delivery is verified separately. <span>Europe/Berlin</span></footer></main>
+<div id="notification" role="status" hidden></div>
+</body></html>

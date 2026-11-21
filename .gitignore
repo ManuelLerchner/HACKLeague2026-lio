@@ -1,0 +1,16 @@
+.pixi/
+.env
+.env.*
+!.env.example
+.data/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.coverage
+htmlcov/
+dist/
+artifacts/
+.DS_Store

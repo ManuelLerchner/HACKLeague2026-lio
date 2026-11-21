@@ -1,0 +1,1 @@
+{"document_id":"DEMO-REPLY-1","po_number":"DEMO-4100","line_number":"10","supplier_id":"SYN-A","unit":"EA","deliveries":[{"quantity":"1200","promised_date":"2026-11-22"}],"intent":"confirmed","replaces_previous":true,"evidence_quote":"We confirm the full 1200 EA for PO DEMO-4100 line 10 on 2026-11-22. This replaces all previous confirmations."}

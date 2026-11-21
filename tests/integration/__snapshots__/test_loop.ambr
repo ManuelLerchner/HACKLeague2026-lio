@@ -1,0 +1,254 @@
+# serializer version: 1
+# name: test_full_replay
+  dict({
+    'amended': list([
+      dict({
+        'issue': 'CHANGED_COMMITMENT',
+        'messages': list([
+          dict({
+            'body': '''
+              Northstar Components
+              
+              PO DEMO-4100 / 10
+              Part: INSERT-A
+              Ordered: 1200 EA
+              Requested delivery: 2026-11-22
+              
+              Please confirm the total quantity, delivery date and shipping conditions for this order. State whether this replaces earlier confirmations. This is an information request only; no revised terms or costs are accepted.
+              
+              Procurement
+            ''',
+            'direction': 'outbound',
+            'status': 'sent',
+            'to': list([
+              'orders@northstar.example.test',
+            ]),
+          }),
+        ]),
+        'po_line': 'DEMO-4100/10',
+        'priority': 'P1',
+        'reason': 'Confirmed total differs from ordered total. Confirmed violation on a launch-critical order due before cutoff.; Supplier amended an earlier commitment; reconfirm the change. Launch-critical commitment needs clarification.',
+        'state': 'AWAITING_REPLY',
+      }),
+      dict({
+        'issue': 'QUANTITY_MISMATCH',
+        'messages': list([
+          dict({
+            'body': '''
+              Northstar Components
+              
+              PO DEMO-4100 / 10
+              Part: INSERT-A
+              Ordered: 1200 EA
+              Requested delivery: 2026-11-22
+              
+              Please confirm the total quantity, delivery date and shipping conditions for this order. State whether this replaces earlier confirmations. This is an information request only; no revised terms or costs are accepted.
+              
+              Procurement
+            ''',
+            'direction': 'outbound',
+            'status': 'sent',
+            'to': list([
+              'orders@northstar.example.test',
+            ]),
+          }),
+        ]),
+        'po_line': 'DEMO-4100/10',
+        'priority': 'P0',
+        'reason': 'Confirmed total differs from ordered total. Confirmed violation on a launch-critical order due before cutoff.; Supplier amended an earlier commitment; reconfirm the change. Launch-critical commitment needs clarification.',
+        'state': 'AWAITING_REPLY',
+      }),
+      dict({
+        'issue': 'MISSING_CONFIRMATION',
+        'messages': list([
+          dict({
+            'body': '''
+              Wisła Packaging
+              
+              PO DEMO-4200 / 20
+              Part: SLEEVE-B
+              Ordered: 600 EA
+              Requested delivery: 2026-11-23
+              
+              Prosimy o potwierdzenie całkowitej ilości, daty dostawy i warunków wysyłki. Prosimy wskazać, czy odpowiedź zastępuje wcześniejsze potwierdzenia. To wyłącznie zapytanie informacyjne; nie akceptujemy nowych warunków ani kosztów.
+              
+              Procurement
+            ''',
+            'direction': 'outbound',
+            'status': 'sent',
+            'to': list([
+              'orders@wisla.example.test',
+            ]),
+          }),
+        ]),
+        'po_line': 'DEMO-4200/20',
+        'priority': 'P2',
+        'reason': 'No attributable supplier confirmation. Order is not marked launch-critical.',
+        'state': 'AWAITING_REPLY',
+      }),
+    ]),
+    'counts': dict({
+      'case_events': 37,
+      'cases': 3,
+      'commitment_claims': 3,
+      'messages': 4,
+      'source_files': 4,
+    }),
+    'final': list([
+      dict({
+        'issue': 'CHANGED_COMMITMENT',
+        'messages': list([
+          dict({
+            'body': '''
+              Northstar Components
+              
+              PO DEMO-4100 / 10
+              Part: INSERT-A
+              Ordered: 1200 EA
+              Requested delivery: 2026-11-22
+              
+              Please confirm the total quantity, delivery date and shipping conditions for this order. State whether this replaces earlier confirmations. This is an information request only; no revised terms or costs are accepted.
+              
+              Procurement
+            ''',
+            'direction': 'outbound',
+            'status': 'sent',
+            'to': list([
+              'orders@northstar.example.test',
+            ]),
+          }),
+        ]),
+        'po_line': 'DEMO-4100/10',
+        'priority': 'P1',
+        'reason': 'Supplier confirmation matches the order. Physical receipt remains unverified.',
+        'state': 'RESOLVED',
+      }),
+      dict({
+        'issue': 'QUANTITY_MISMATCH',
+        'messages': list([
+          dict({
+            'body': '''
+              Northstar Components
+              
+              PO DEMO-4100 / 10
+              Part: INSERT-A
+              Ordered: 1200 EA
+              Requested delivery: 2026-11-22
+              
+              Please confirm the total quantity, delivery date and shipping conditions for this order. State whether this replaces earlier confirmations. This is an information request only; no revised terms or costs are accepted.
+              
+              Procurement
+            ''',
+            'direction': 'outbound',
+            'status': 'sent',
+            'to': list([
+              'orders@northstar.example.test',
+            ]),
+          }),
+          dict({
+            'body': '''
+              We confirm the full 1200 EA for PO DEMO-4100 line 10 on 2026-11-22. This replaces all previous confirmations.
+              
+              CONFIRMATION_JSON:{"document_id": "DEMO-REPLY-1", "po_number": "DEMO-4100", "line_number": "10", "supplier_id": "SYN-A", "unit": "EA", "deliveries": [{"quantity": "1200", "promised_date": "2026-11-22"}], "intent": "confirmed", "replaces_previous": true, "evidence_quote": "We confirm the full 1200 EA for PO DEMO-4100 line 10 on 2026-11-22. This replaces all previous confirmations."}
+            ''',
+            'direction': 'inbound',
+            'status': 'received',
+            'to': list([
+              'buyer@example.test',
+            ]),
+          }),
+        ]),
+        'po_line': 'DEMO-4100/10',
+        'priority': 'P0',
+        'reason': 'Supplier confirmation matches the order. Physical receipt remains unverified.',
+        'state': 'RESOLVED',
+      }),
+      dict({
+        'issue': 'MISSING_CONFIRMATION',
+        'messages': list([
+          dict({
+            'body': '''
+              Wisła Packaging
+              
+              PO DEMO-4200 / 20
+              Part: SLEEVE-B
+              Ordered: 600 EA
+              Requested delivery: 2026-11-23
+              
+              Prosimy o potwierdzenie całkowitej ilości, daty dostawy i warunków wysyłki. Prosimy wskazać, czy odpowiedź zastępuje wcześniejsze potwierdzenia. To wyłącznie zapytanie informacyjne; nie akceptujemy nowych warunków ani kosztów.
+              
+              Procurement
+            ''',
+            'direction': 'outbound',
+            'status': 'sent',
+            'to': list([
+              'orders@wisla.example.test',
+            ]),
+          }),
+        ]),
+        'po_line': 'DEMO-4200/20',
+        'priority': 'P2',
+        'reason': 'No attributable supplier confirmation. Order is not marked launch-critical.',
+        'state': 'AWAITING_REPLY',
+      }),
+    ]),
+    'initial': list([
+      dict({
+        'issue': 'QUANTITY_MISMATCH',
+        'messages': list([
+          dict({
+            'body': '''
+              Northstar Components
+              
+              PO DEMO-4100 / 10
+              Part: INSERT-A
+              Ordered: 1200 EA
+              Requested delivery: 2026-11-22
+              
+              Please confirm the total quantity, delivery date and shipping conditions for this order. State whether this replaces earlier confirmations. This is an information request only; no revised terms or costs are accepted.
+              
+              Procurement
+            ''',
+            'direction': 'outbound',
+            'status': 'sent',
+            'to': list([
+              'orders@northstar.example.test',
+            ]),
+          }),
+        ]),
+        'po_line': 'DEMO-4100/10',
+        'priority': 'P0',
+        'reason': 'Confirmed total differs from ordered total. Confirmed violation on a launch-critical order due before cutoff.',
+        'state': 'AWAITING_REPLY',
+      }),
+      dict({
+        'issue': 'MISSING_CONFIRMATION',
+        'messages': list([
+          dict({
+            'body': '''
+              Wisła Packaging
+              
+              PO DEMO-4200 / 20
+              Part: SLEEVE-B
+              Ordered: 600 EA
+              Requested delivery: 2026-11-23
+              
+              Prosimy o potwierdzenie całkowitej ilości, daty dostawy i warunków wysyłki. Prosimy wskazać, czy odpowiedź zastępuje wcześniejsze potwierdzenia. To wyłącznie zapytanie informacyjne; nie akceptujemy nowych warunków ani kosztów.
+              
+              Procurement
+            ''',
+            'direction': 'outbound',
+            'status': 'sent',
+            'to': list([
+              'orders@wisla.example.test',
+            ]),
+          }),
+        ]),
+        'po_line': 'DEMO-4200/20',
+        'priority': 'P2',
+        'reason': 'No attributable supplier confirmation. Order is not marked launch-critical.',
+        'state': 'AWAITING_REPLY',
+      }),
+    ]),
+  })
+# ---

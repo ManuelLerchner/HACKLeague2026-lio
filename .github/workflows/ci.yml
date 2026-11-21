@@ -1,0 +1,29 @@
+name: verify
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: chaser
+          POSTGRES_PASSWORD: chaser
+          POSTGRES_DB: chaser
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U chaser" --health-interval 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://chaser:chaser@127.0.0.1:5432/chaser
+      TEST_POSTGRES_URL: postgresql+psycopg://chaser:chaser@127.0.0.1:5432/chaser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.9.1
+        with:
+          pixi-version: v0.84.1
+          cache: true
+      - run: pixi install --locked
+      - run: pixi run lint
+      - run: pixi run typecheck
+      - run: pixi run db-upgrade
+      - run: pixi run test
+      - run: pixi run alembic downgrade base && pixi run db-upgrade

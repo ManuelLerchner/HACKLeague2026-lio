@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Supplier Chaser demo walkthrough</title><style>
+*{box-sizing:border-box}body{margin:0;background:#193b32;font-family:Arial,sans-serif;color:white;width:1600px;height:1000px;overflow:hidden}.screen{height:850px;width:1600px;object-fit:contain;object-position:top}.caption{height:150px;padding:24px 65px;display:flex;gap:35px;align-items:center}.number{font-size:42px;color:#b6d698}.caption strong{font-size:25px;line-height:1.4;font-weight:500}.caption p{font-size:17px;margin:8px 0 0;color:#bfcdb7}.label{position:absolute;top:16px;right:25px;background:#193b32;color:#e7f1df;padding:8px 12px;border-radius:5px;font-size:13px}
+</style></head><body><img class="screen" id="screen" alt="Recorded Supplier Chaser application"><div class="label">SYNTHETIC DATA · FIXTURE MAILBOX</div><div class="caption"><span class="number" id="number"></span><div><strong id="title"></strong><p id="subtitle"></p></div></div><script>
+const frames=[
+['slide-1.png','Every supplier commitment becomes a tracked next action.','A working procurement workflow. This walkthrough uses synthetic files and a deterministic mailbox.'],
+['inbox-before.png','The buyer starts with an actionable case inbox.','Missing or inconsistent confirmations have a supplier, priority, status and next follow-up.'],
+['case-before.png','The evidence shows the gap: 1,200 EA ordered, 900 EA confirmed.','The order and supplier claim are separate. Physical receipt remains unknown.'],
+['conversation-before.png','The agent asks the verified supplier a precise factual question.','The fixture transport records the send and thread. It accepts no costs or revised terms.'],
+['case-amended.png','A changed file is detected on the next poll.','The amended confirmation changes the claim to 1,000 EA. Earlier source evidence is preserved.'],
+['conversation-after.png','The recorded supplier reply confirms the full order.','Extraction is validated and linked to the original reply before deterministic reconciliation.'],
+['case-after.png','The confirmation case resolves. Delivery is still unverified.','Repeated polling creates no duplicate case or inquiry. The separate missing-confirmation case stays open.'],
+['slide-5.png','Fewer manual follow-ups. Measure the result in a pilot.','No fabricated savings. Live email and public deployment still require configuration.']
+];const n=Number(new URLSearchParams(location.search).get('frame')||0);const f=frames[n];document.querySelector('#screen').src='../artifacts/'+f[0];document.querySelector('#number').textContent=String(n+1).padStart(2,'0');document.querySelector('#title').textContent=f[1];document.querySelector('#subtitle').textContent=f[2];
+</script></body></html>

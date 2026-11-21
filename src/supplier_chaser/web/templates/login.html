@@ -1,0 +1,4 @@
+{% extends 'base.html' %}{% block content %}
+<section class="page-heading"><div class="eyebrow">PRIVATE PROCUREMENT WORKSPACE</div><h1>Every commitment,<br>accounted for.</h1><p>Sign in to review evidence and manage supplier inquiries.</p></section>
+<section class="panel login"><h2>Buyer access</h2><form method="post" action="/login"><label for="token">Admin token</label><input id="token" name="token" type="password" required autocomplete="current-password"><button type="submit">Open case inbox →</button></form><p class="muted">Use the token in your private local configuration.</p></section>
+{% endblock %}

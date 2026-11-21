@@ -1,0 +1,1 @@
+{"records":[{"kind":"confirmation","document_id":"DEMO-C2","po_number":"DEMO-4100","line_number":"10","supplier_id":"SYN-A","unit":"EA","deliveries":[{"quantity":"1000","promised_date":"2026-11-22"}],"intent":"confirmed","supersedes":["DEMO-C1"],"evidence_quote":"Amendment: 1000 EA for 2026-11-22, replacing DEMO-C1."}]}
