@@ -1,4 +1,5 @@
 import hashlib
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
@@ -15,6 +16,7 @@ from supplier_chaser.clock import Clock
 from supplier_chaser.config import Settings
 from supplier_chaser.ingestion.mapping import FIELDS, MappingSpec, mapped_records, suggest
 from supplier_chaser.ingestion.review import mapping_application
+from supplier_chaser.web.evidence import preview_file
 from supplier_chaser.workflow.jobs import enqueue
 
 
@@ -60,6 +62,13 @@ def register_source_routes(
     @app.get("/sources", response_class=HTMLResponse, dependencies=[Depends(authorized)])
     def source_inbox(request: Request, q: str = "") -> HTMLResponse:
         with factory() as session:
+            from supplier_chaser.agent.discover import all_document_findings
+
+            investigations = {
+                item["source_id"]: item
+                for items in all_document_findings(session).values()
+                for item in items
+            }
             query = select(SourceFile).order_by(SourceFile.downloaded_at.desc(), SourceFile.path)
             if q:
                 query = query.where(SourceFile.path.contains(q, autoescape=True))
@@ -70,6 +79,7 @@ def register_source_routes(
                     "status": status(),
                     "files": list(session.scalars(query.limit(500))),
                     "q": q,
+                    "investigations": investigations,
                 },
             )
 
@@ -97,12 +107,7 @@ def register_source_routes(
             ]
             po_lines = list(session.scalars(select(PORow).order_by(PORow.id)))
             matching_orders = {
-                fact.id: [
-                    po
-                    for po in po_lines
-                    if po.po_number in fact.normalized_json["text"]
-                    and po.part_number in fact.normalized_json["text"]
-                ]
+                fact.id: [po for po in po_lines if po.po_number in fact.normalized_json["text"]]
                 for fact in facts
                 if fact.fact_type == "text"
             }
@@ -119,14 +124,20 @@ def register_source_routes(
                     "has_imported_orders": bool(po_lines),
                     "matching_orders": matching_orders,
                     "extractions": [fact for fact in facts if fact.fact_type == "confirmation"],
+                    "document_analyses": [
+                        fact for fact in facts if fact.fact_type == "document_analysis"
+                    ],
                     "source_jobs": [
                         job
                         for job in session.scalars(
                             select(JobRow).where(
-                                JobRow.job_type.in_(["extract_source", "apply_mapping"])
+                                JobRow.job_type.in_(
+                                    ["extract_source", "apply_mapping", "investigate_document"]
+                                )
                             )
                         )
-                        if job.payload_json["payload"].get(
+                        if job.payload_json["payload"].get("source_file_id") == identifier
+                        or job.payload_json["payload"].get(
                             "source_fact_id", job.payload_json["payload"].get("table_fact_id")
                         )
                         in {fact.id for fact in facts}
@@ -145,6 +156,47 @@ def register_source_routes(
                 path, media_type="application/octet-stream", filename=Path(source.path).name
             )
 
+    @app.get("/api/v1/sources/{identifier}/progress", dependencies=[Depends(authorized)])
+    def source_progress(identifier: str) -> dict:
+        with factory() as session:
+            source = source_file(session, identifier)
+            facts = list(
+                session.scalars(select(SourceFact).where(SourceFact.source_file_id == identifier))
+            )
+            ids = {fact.id for fact in facts}
+            jobs = [
+                job
+                for job in session.scalars(select(JobRow))
+                if (
+                    job.payload_json["payload"].get("source_file_id") == identifier
+                    or job.payload_json["payload"].get("source_fact_id") in ids
+                    or job.payload_json["payload"].get("table_fact_id") in ids
+                )
+            ]
+            revision = hashlib.sha256(
+                json.dumps(
+                    {
+                        "facts": sorted(fact.id for fact in facts),
+                        "status": source.parse_status,
+                        "jobs": sorted((job.id, job.status) for job in jobs),
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            return {
+                "pending": any(job.status in {"queued", "running"} for job in jobs),
+                "revision": revision,
+                "status": "failed"
+                if any(job.status == "failed" for job in jobs)
+                else source.parse_status,
+            }
+
+    @app.get("/sources/{identifier}/preview", dependencies=[Depends(authorized)])
+    def preview_original(identifier: str) -> FileResponse:
+        with factory() as session:
+            source = source_file(session, identifier)
+            return preview_file(settings.data_dir / "blobs" / source.blob_ref, source.path)
+
     @app.post("/api/v1/sources/preview", dependencies=[Depends(authorized)])
     def preview(body: MappingRequest) -> dict:
         with factory() as session:
@@ -161,17 +213,26 @@ def register_source_routes(
             if fact is None or fact.fact_type != "text" or po is None:
                 raise HTTPException(404, "Source text or order line not found")
             text = fact.normalized_json["text"]
-            if po.po_number not in text or po.part_number not in text:
-                raise HTTPException(422, "Source must identify the selected PO and material")
+            if po.po_number not in text:
+                raise HTTPException(422, "Source must identify the selected PO")
+            from supplier_chaser.agent.discover import relevant_documents
+
+            document = next(
+                (item for item in relevant_documents(session) if item[0].id == fact.source_file_id),
+                None,
+            )
+            if document is None:
+                raise HTTPException(409, "This source is no longer the current document version")
             job = enqueue(
                 session,
-                "extract_source",
+                "investigate_document",
                 {
-                    "source_fact_id": fact.id,
-                    "po_line_id": po.id,
+                    "source_file_id": fact.source_file_id,
+                    "projection_hash": document[3],
+                    "po_line_ids": [row.id for row in document[2]],
                     "requested_by": admin,
                 },
-                f"extract-source:{fact.id}:{po.id}",
+                f"investigate-document:{fact.source_file_id}:{document[3]}",
                 clock.now(),
             )
             return {"job_id": job.id, "status": job.status}

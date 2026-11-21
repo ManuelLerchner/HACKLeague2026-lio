@@ -2,6 +2,7 @@ import json
 
 from openai import OpenAI
 
+from supplier_chaser.domain.documents import DocumentItems
 from supplier_chaser.domain.models import Confirmation, Draft, POLine, Supplier
 
 SYSTEM = (
@@ -30,6 +31,34 @@ class OpenAILLM:
         if parsed is None:
             raise ValueError("Provider refused extraction")
         return parsed
+
+    def extract_document(self, text: str) -> DocumentItems:
+        response = self.client.chat.completions.parse(
+            model=self.model_version,
+            messages=[
+                {
+                    "role": "system",
+                    "content": SYSTEM
+                    + (
+                        " Extract each supplier item separately. "
+                        "Never sum rows or assign ERP lines. "
+                        "Copy item_reference exactly. Give each row a unique item_id. "
+                        "Preserve missing units as null. Quantity is not unit price. "
+                        "Classify whether this is an order confirmation or another document. "
+                        "Preserve shipping, payment and release conditions in document_terms. "
+                        "complete_order_lines MUST be false. "
+                        "Each row quote must contain material, quantity and date. "
+                        "Preserve original line breaks."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            response_format=DocumentItems,
+        )
+        parsed = response.choices[0].message.parsed
+        if parsed is None:
+            raise ValueError("Provider refused document extraction")
+        return parsed.model_copy(update={"complete_order_lines": False})
 
     def draft_supplier_question(self, po: POLine, supplier: Supplier, reason: str) -> Draft:
         response = self.client.chat.completions.parse(

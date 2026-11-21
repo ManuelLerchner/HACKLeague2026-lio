@@ -3,3 +3,6 @@
 .reply-review{margin-top:20px;padding:18px;border:1px solid var(--line);border-radius:8px;background:var(--paper,#f8faf6)}.reply-review label{font-size:12px;margin:12px 0}.reply-review textarea,.reply-review input:not([type="checkbox"]){width:100%}.reply-review input[type="checkbox"]{display:inline-block;margin-right:8px}.reply-review button{margin:6px 8px 0 0}.inbox-group th{background:#edf2e7;color:var(--ink);font-size:12px;padding:14px 20px}
 
 .actions .source-review-action{display:flex;width:100%;margin-top:13px;text-align:center;font-size:13px}.actions .source-review-action:hover{background:#285548;text-decoration:underline}
+
+#worker-queue-summary { margin-top: 1.5rem; padding: 1rem; border: 1px solid #d5ddd7; border-radius: 10px; font-size: .8rem; }
+#worker-queue-summary p { line-height: 1.7; margin-bottom: 0; }

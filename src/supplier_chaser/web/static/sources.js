@@ -14,7 +14,8 @@ document.addEventListener("submit", async (event) => {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Extraction rejected.");
-      result.textContent = "Extraction queued. Refresh after the worker processes the document.";
+      result.textContent = "Investigation queued. Results will update automatically.";
+      document.dispatchEvent(new CustomEvent("supplier-chaser:action-queued", {detail: {form: extraction}}));
     } catch (error) { result.textContent = error.message; }
     finally { button.disabled = false; }
     return;
@@ -51,8 +52,9 @@ document.addEventListener("submit", async (event) => {
     });
     const data = await response.json();
     if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Check the mapping fields.");
+    if (action === "apply") document.dispatchEvent(new CustomEvent("supplier-chaser:action-queued", {detail: {form}}));
     result.textContent = action === "apply"
-      ? `Queued ${data.rows} rows for import. Refresh after the worker processes the job.`
+      ? `Queued ${data.rows} rows for import. This page will update when processing finishes.`
       : `${data.row_count} valid rows. Preview:\n\n` + data.sample.map(([locator, values]) =>
         locator + "\n" + Object.entries(values).map(([key, value]) =>
           `${key.replaceAll("_", " ")}: ${value === null ? "unknown" : typeof value === "object" ? JSON.stringify(value) : value}`

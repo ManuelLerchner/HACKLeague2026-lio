@@ -8,8 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from supplier_chaser.adapters.db import JobRow, PORow, SourceFact, SystemRow, make_engine, sessions
+from supplier_chaser.agent.discover import discover_documents
 from supplier_chaser.agent.draft import create_draft
-from supplier_chaser.agent.extract_source import extract_source
+from supplier_chaser.agent.investigate_document import investigate_document
 from supplier_chaser.bootstrap import llm_adapter, mail_gateway, portal_client
 from supplier_chaser.cases.service import reconcile_line
 from supplier_chaser.clock import Clock, SystemClock
@@ -51,6 +52,10 @@ class Worker:
     def drain(self, limit: int = 100) -> int:
         processed = 0
         while processed < limit:
+            with self.factory.begin() as session:
+                heartbeat = session.get(SystemRow, "worker")
+                if heartbeat:
+                    heartbeat.updated_at = self.clock.now()
             job = claim_job(self.factory, self.owner, self.clock.now())
             if job is None:
                 break
@@ -103,8 +108,17 @@ class Worker:
             elif job.job_type == "followups":
                 follow_ups(session, self.settings, now)
             elif job.job_type == "refresh":
+                discover_documents(session, self.settings, now)
+                from supplier_chaser.agent.discover import all_document_findings
+
+                findings = (
+                    all_document_findings(session)
+                    if self.settings.auto_investigate_documents
+                    and self.settings.llm_provider != "fixture"
+                    else {}
+                )
                 for line in session.scalars(select(PORow)):
-                    reconcile_line(session, line.id, self.settings, now)
+                    reconcile_line(session, line.id, self.settings, now, findings.get(line.id, []))
             elif job.job_type == "reconcile":
                 reconcile_line(session, payload["po_line_id"], self.settings, now)
             elif job.job_type == "draft":
@@ -139,13 +153,36 @@ class Worker:
                     payload["approved_by"],
                 )
             elif job.job_type == "extract_source":
-                extract_source(
+                from supplier_chaser.agent.discover import relevant_documents
+
+                fact = session.get(SourceFact, payload["source_fact_id"])
+                document = next(
+                    (
+                        item
+                        for item in relevant_documents(session)
+                        if fact and item[0].id == fact.source_file_id
+                    ),
+                    None,
+                )
+                if document:
+                    investigate_document(
+                        session,
+                        document[0].id,
+                        document[3],
+                        self.settings,
+                        self.extractor,
+                        self.drafter,
+                        now,
+                    )
+            elif job.job_type == "investigate_document":
+                investigate_document(
                     session,
-                    payload["source_fact_id"],
-                    payload["po_line_id"],
+                    payload["source_file_id"],
+                    payload["projection_hash"],
+                    self.settings,
                     self.extractor,
+                    self.drafter,
                     now,
-                    payload["requested_by"],
                 )
             else:
                 raise ValueError("Unknown job type")

@@ -10,6 +10,42 @@ from supplier_chaser.domain.models import Outbound, SendResult, State
 from supplier_chaser.ports.mail import MailGateway
 
 
+def send_block_reasons(
+    message: MessageRow,
+    supplier: SupplierRow | None,
+    settings: Settings,
+    supplier_sent_count: int,
+    case_sent_count: int,
+) -> list[str]:
+    reasons = []
+    if supplier is None:
+        reasons.append("Supplier contact is missing; import and verify trusted supplier metadata.")
+    else:
+        if not supplier.verified:
+            reasons.append("Supplier contact is unverified; verify trusted supplier metadata.")
+        if message.recipients != [supplier.email]:
+            reasons.append("Draft recipient differs from the verified supplier contact.")
+    if settings.mail_mode != "fixture":
+        if not settings.registered_sender_verified:
+            reasons.append("Team sender registration has not been verified.")
+        if not settings.mailbox_verified:
+            reasons.append("Inbound mailbox has not been verified.")
+    if not (message.metadata_json.get("approved_by") or message.metadata_json.get("safe_template")):
+        reasons.append("Draft has no buyer approval or approved safe template.")
+    if message.sender != settings.mail_from:
+        reasons.append("Draft sender differs from the configured team sender.")
+    if supplier_sent_count >= settings.max_supplier_sends_per_day:
+        reasons.append(
+            f"Supplier send limit reached: {supplier_sent_count} sends in the last 24 hours; "
+            f"limit {settings.max_supplier_sends_per_day}."
+        )
+    if case_sent_count >= settings.max_reminders + 1:
+        reasons.append(
+            f"Case send limit reached: {case_sent_count} sends; limit {settings.max_reminders + 1}."
+        )
+    return reasons
+
+
 def send_message(
     factory: sessionmaker, message_id: str, gateway: MailGateway, settings: Settings, now: datetime
 ) -> None:
@@ -49,15 +85,6 @@ def send_message(
             select(SupplierRow).where(SupplierRow.id == po.supplier_id).with_for_update()
         )
         live = settings.mail_mode != "fixture"
-        safe_identity = (
-            supplier is not None and supplier.verified and message.recipients == [supplier.email]
-        )
-        live_ready = (
-            settings.registered_sender_verified
-            and settings.mailbox_verified
-            and supplier is not None
-            and supplier.email in settings.outbound_allowlist
-        )
         sent_count = (
             session.scalar(
                 select(func.count())
@@ -85,24 +112,16 @@ def send_message(
             )
             or 0
         )
-        approved = message.metadata_json.get("approved_by") or message.metadata_json.get(
-            "safe_template"
-        )
-        if (
-            not safe_identity
-            or (live and not live_ready)
-            or not approved
-            or message.sender != settings.mail_from
-            or sent_count >= settings.max_supplier_sends_per_day
-            or case_count >= settings.max_reminders + 1
-        ):
+        reasons = send_block_reasons(message, supplier, settings, sent_count, case_count)
+        if reasons:
             message.status = "blocked"
+            message.metadata_json = {**message.metadata_json, "block_reasons": reasons}
             move(
                 session,
                 case,
                 State.BLOCKED,
                 now,
-                "Outbound identity, approval, allowlist or send cap check failed",
+                " ".join(reasons),
             )
             return
         if live and (settings.dry_run or not settings.outbound_mail_enabled):

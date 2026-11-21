@@ -233,6 +233,9 @@ def poll_portal(
             source.error = f"{type(exc).__name__}: import requires review"
             source.blob_ref = blob_ref
             failed += 1
+    from supplier_chaser.agent.discover import discover_documents
+
+    discover_documents(session, settings, now)
     return {
         "files": len(listing),
         "changed": changed,

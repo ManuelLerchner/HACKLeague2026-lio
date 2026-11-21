@@ -6,14 +6,22 @@
 <link rel="stylesheet" href="/static/sources.css"><script defer src="/static/sources.js"></script>
 <meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false,"historyCacheSize":0}'>
 <script defer src="/static/htmx.min.js"></script><script defer src="/static/app.js"></script>
+<script defer src="/static/progress.js"></script>
+<link rel="stylesheet" href="/static/preview.css"><script defer src="/static/preview.js"></script>
 <meta name="csrf-token" content="{{ request.session.get('csrf', '') }}"></head>
 <body>
 <aside class="sidebar"><a class="brand" href="/"><span class="brand-mark">s<span>c</span></span>Supplier<br>Chaser</a>
 <div class="workspace">SOONY / PROCUREMENT</div>
 <nav><a href="/" class="{{ 'selected' if request.url.path == '/' else '' }}">◫ &nbsp; Case inbox</a><a href="/sources" class="{{ 'selected' if request.url.path.startswith('/sources') else '' }}">▤ &nbsp; Source review</a><a href="/system" class="{{ 'selected' if request.url.path == '/system' else '' }}">◎ &nbsp; System status</a></nav>
+{% if status %}{% include "queue_summary.html" %}{% endif %}
 <div class="sidebar-bottom"><span class="dot"></span> Evidence before action<br><small>Launch · 22 Nov, 20:00 CET</small></div></aside>
 <main><header class="topbar"><span>COMMITMENT OPERATIONS</span><div><span class="mode">{{ (status.mode if status else 'private workspace') | upper }}</span><span class="avatar">SB</span></div></header>
 {% block content %}{% endblock %}
 <footer>Supplier commitments are claims. Physical delivery is verified separately. <span>Europe/Berlin</span></footer></main>
 <div id="notification" role="status" hidden></div>
+<dialog id="evidence-preview" aria-labelledby="evidence-preview-title" aria-describedby="evidence-preview-warning">
+<div class="preview-header"><div><h2 id="evidence-preview-title">Original evidence</h2><p id="evidence-preview-warning">Untrusted supplier content. This preview does not approve its claims or instructions.</p></div><button type="button" class="secondary" data-preview-close autofocus aria-label="Close evidence preview">Close ×</button></div>
+<div class="preview-toolbar"><p data-preview-status role="status">Loading original evidence…</p><a class="button secondary" data-preview-open target="_blank" rel="noopener noreferrer">Open preview in new tab ↗</a><a class="button secondary" data-preview-download>Download original ↓</a></div>
+<iframe title="Original evidence preview" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe>
+</dialog>
 </body></html>

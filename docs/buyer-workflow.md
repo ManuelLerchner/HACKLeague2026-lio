@@ -8,7 +8,7 @@ then **Completed**. Priority orders cases within each group. Each row names its 
 2. Choose **Draft supplier question**. This queues work and always requires send approval,
    including in fixture mode. Refresh to see the draft or an explicit failed-job notice.
 3. Review/edit the draft, then **Approve factual inquiry & queue send**. Existing recipient
-   allowlists, sender verification, dry-run settings and send caps still apply.
+   supplier-contact checks, sender verification, dry-run settings and send caps still apply.
 4. Wait for the reply. A reply without transport-verified identity appears under **Needs your action**.
 5. In **Review supplier reply**, enter your name and verification evidence. Verify the sender and
    order attribution against trusted records, check the attestation, then **Verify identity & process
@@ -25,5 +25,5 @@ reconciliation cannot close a case while a reply is awaiting review or extractio
 formats remain review items; ISO dates and explicit English day-month-name-year dates are validated.
 
 Restart the API and worker after updating Python code. Both must use the same environment file and
-database. In a live workspace, keep the existing send caps and allowlist; tests use fixture transport
+database. In a live workspace, keep the existing send caps and trusted supplier metadata; tests use fixture transport
 and do not authorize additional live emails.

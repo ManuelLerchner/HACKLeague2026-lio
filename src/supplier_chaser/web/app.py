@@ -35,6 +35,7 @@ from supplier_chaser.cases.service import move, record_event
 from supplier_chaser.clock import Clock, SystemClock
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.models import State
+from supplier_chaser.web.evidence import preview_file
 from supplier_chaser.web.sources import register_source_routes
 from supplier_chaser.workflow.jobs import enqueue
 
@@ -60,9 +61,12 @@ class ReplyReview(BaseModel):
     identity_verified: bool = False
 
 
-def serialize_case(session: Session, case: CaseRow) -> dict:
+def serialize_case(session: Session, case: CaseRow, findings: list[dict] | None = None) -> dict:
     po = session.get(PORow, case.po_line_id)
     supplier = session.get(SupplierRow, po.supplier_id) if po else None
+    from supplier_chaser.agent.discover import document_findings
+
+    findings = document_findings(session, case.po_line_id) if findings is None else findings
     last = session.scalar(
         select(MessageRow)
         .where(
@@ -80,7 +84,9 @@ def serialize_case(session: Session, case: CaseRow) -> dict:
         )
         if j.payload_json["payload"].get("case_id") == case.id
     ]
-    pending = any(j.status in {"queued", "running"} for j in jobs)
+    pending = any(j.status in {"queued", "running"} for j in jobs) or any(
+        item["status"] == "pending" for item in findings
+    )
     held = session.scalar(
         select(MessageRow.id)
         .where(
@@ -92,12 +98,16 @@ def serialize_case(session: Session, case: CaseRow) -> dict:
     )
     if case.state in {State.RESOLVED, State.CANCELLED}:
         group, action = "Completed", "View evidence"
-    elif pending:
+    elif pending or any(item["status"] == "pending" for item in findings):
         group, action = "In progress", "Worker action queued"
     elif held:
         group, action = "Needs your action", "Review supplier reply"
-    elif any(j.status == "failed" for j in jobs):
+    elif any(j.status == "failed" for j in jobs) or any(
+        item["status"] == "error" for item in findings
+    ):
         group, action = "Needs your action", "Review failed action"
+    elif any(item["status"] == "needs_review" for item in findings):
+        group, action = "Needs your action", "Investigate source evidence"
     elif case.state == State.AWAITING_REPLY:
         group, action = "Waiting for supplier", "Await reply"
     else:
@@ -110,6 +120,7 @@ def serialize_case(session: Session, case: CaseRow) -> dict:
             else "Review blocker"
         )
     return {
+        "document_findings": findings,
         "action_group": group,
         "next_action": action,
         "pending_work": pending,
@@ -214,11 +225,14 @@ def create_app(
     async def security_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers["Cache-Control"] = "no-store"
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; style-src 'self'; script-src 'self'; "
-            "img-src 'self' data:; frame-ancestors 'none'; form-action 'self'"
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            (
+                "default-src 'self'; style-src 'self'; script-src 'self'; "
+                "img-src 'self' data:; frame-ancestors 'none'; form-action 'self'"
+            ),
         )
         return response
 
@@ -267,8 +281,11 @@ def create_app(
                 query = query.where(CaseRow.priority == priority)
             if supplier_id:
                 query = query.where(PORow.supplier_id == supplier_id)
+            from supplier_chaser.agent.discover import all_document_findings
+
+            findings = all_document_findings(session)
             result = [
-                serialize_case(session, c)
+                serialize_case(session, c, findings.get(c.po_line_id, []))
                 for c in session.scalars(query.order_by(CaseRow.priority, CaseRow.created_at))
             ]
             groups = {
@@ -372,6 +389,13 @@ def create_app(
                     409, "Review the held supplier reply before drafting another inquiry"
                 )
             if case.state in {State.ESCALATED, State.BLOCKED}:
+                for stale in session.scalars(
+                    select(MessageRow).where(
+                        MessageRow.case_id == case.id, MessageRow.status == "draft"
+                    )
+                ):
+                    stale.status = "superseded"
+                session.flush()
                 move(
                     session,
                     case,
@@ -379,11 +403,16 @@ def create_app(
                     clock.now(),
                     "Buyer requested a factual clarification; no terms accepted",
                 )
+            draft_revision = session.scalar(
+                select(func.count())
+                .select_from(MessageRow)
+                .where(MessageRow.case_id == case.id, MessageRow.status == "superseded")
+            )
             job = enqueue(
                 session,
                 "draft",
                 {"case_id": case.id, "require_approval": True},
-                f"manual-draft:{case.id}:{case.updated_at.isoformat()}",
+                f"manual-draft:{case.id}:{case.updated_at.isoformat()}:{draft_revision}",
                 clock.now(),
             )
             return {"job_id": job.id, "status": job.status}
@@ -545,6 +574,15 @@ def create_app(
                 target, media_type="application/octet-stream", filename=Path(source.path).name
             )
 
+    @app.get("/evidence/{fact_id}/preview", dependencies=[Depends(authorized)])
+    def evidence_preview(fact_id: str) -> FileResponse:
+        with factory() as session:
+            fact = session.get(SourceFact, fact_id)
+            source = session.get(SourceFile, fact.source_file_id) if fact else None
+            if source is None:
+                raise HTTPException(404, "Evidence not found")
+            return preview_file(settings.data_dir / "blobs" / source.blob_ref, source.path)
+
     @app.get("/", response_class=HTMLResponse)
     def inbox(
         request: Request,
@@ -587,6 +625,49 @@ def create_app(
                 "status": status(),
             },
         )
+
+    @app.get("/worker-queue", response_class=HTMLResponse, dependencies=[Depends(authorized)])
+    @app.get("/worker-queue/panel", response_class=HTMLResponse, dependencies=[Depends(authorized)])
+    @app.get(
+        "/worker-queue/summary", response_class=HTMLResponse, dependencies=[Depends(authorized)]
+    )
+    def worker_queue(request: Request) -> Response:
+        with factory() as session:
+            summary_only = request.url.path.endswith("/summary")
+            jobs = (
+                []
+                if summary_only
+                else list(
+                    session.scalars(
+                        select(JobRow)
+                        .where(JobRow.status.in_(["running", "queued", "failed"]))
+                        .order_by(JobRow.status.desc(), JobRow.run_after, JobRow.id)
+                        .limit(100)
+                    )
+                )
+            )
+            queue_jobs = []
+            for job in jobs:
+                payload = job.payload_json.get("payload", {})
+                source_id = payload.get("source_file_id")
+                if not source_id and payload.get("source_fact_id"):
+                    fact = session.get(SourceFact, payload["source_fact_id"])
+                    source_id = fact.source_file_id if fact else None
+                queue_jobs.append(
+                    {"job": job, "source_id": source_id, "case_id": payload.get("case_id")}
+                )
+            template = (
+                "queue_summary.html"
+                if summary_only
+                else "queue_panel.html"
+                if request.url.path.endswith("/panel")
+                else "queue.html"
+            )
+            return templates.TemplateResponse(
+                request=request,
+                name=template,
+                context={"status": system_status(session, settings, clock), "jobs": queue_jobs},
+            )
 
     @app.get("/system", response_class=HTMLResponse, dependencies=[Depends(authorized)])
     def system_page(request: Request) -> Response:

@@ -35,7 +35,7 @@ repeated confirmations do not add quantities. No implicit unit conversion occurs
 Use a dedicated inbox. Set SMTP/IMAP hosts, ports and credentials in `.env` or deployment secrets.
 SMTP requires STARTTLS; IMAP requires TLS. Verify sender registration in the portal, then set
 `REGISTERED_SENDER_VERIFIED=true`. Verify actual inbound delivery before setting
-`MAILBOX_VERIFIED=true`. Configure `OUTBOUND_ALLOWLIST` as a JSON array of exact addresses.
+`MAILBOX_VERIFIED=true`. All verified supplier contacts are eligible recipients; there is no separate address allowlist.
 
 Keep `DRY_RUN=true` and `OUTBOUND_MAIL_ENABLED=false` through setup. Test with team-controlled
 addresses before changing these flags. Fixture transport never sends external email, regardless

@@ -201,7 +201,6 @@ def test_live_send_guards(seeded, worker, factory, clock, change):
             "mailbox_verified": change != "unverified_mailbox",
             "outbound_mail_enabled": True,
             "dry_run": False,
-            "outbound_allowlist": ["orders@northstar.example.test", "orders@wisla.example.test"],
         }
     )
 

@@ -24,7 +24,6 @@ class Settings(BaseSettings):
     mail_from: str = "buyer@example.test"
     registered_sender_verified: bool = False
     mailbox_verified: bool = False
-    outbound_allowlist: list[str] = []
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
@@ -51,3 +50,4 @@ class Settings(BaseSettings):
     max_reminders: int = 1
     max_supplier_sends_per_day: int = 10
     auto_draft: bool = True
+    auto_investigate_documents: bool = True

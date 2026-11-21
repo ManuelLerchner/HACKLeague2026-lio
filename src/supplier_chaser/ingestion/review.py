@@ -122,6 +122,9 @@ def apply_mapping(
         },
         now,
     )
+    from supplier_chaser.agent.discover import discover_documents
+
+    discover_documents(session, settings, now)
     return len(records)
 
 

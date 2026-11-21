@@ -1,0 +1,6 @@
+<div id="worker-queue-summary" hx-get="/worker-queue/summary" hx-trigger="every 5s" hx-swap="outerHTML">
+<a href="/worker-queue" class="button secondary">Worker queue →</a>
+<p><strong>{{ 'Worker online' if status.worker_healthy else 'Worker offline' }}</strong><br>
+{{ status.jobs.get('queued', 0) }} queued · {{ status.jobs.get('running', 0) }} running<br>
+{{ status.jobs.get('failed', 0) }} failed</p>
+</div>

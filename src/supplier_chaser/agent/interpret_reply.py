@@ -37,6 +37,20 @@ def source_quote(text: str, quote: str) -> str:
     return matches[0].group()
 
 
+def quantities_in_quote(quote: str) -> set[Decimal]:
+    quantities = set()
+    for token in re.findall(r"(?<![\w.])\d[\d,.]*(?![\w.])", quote):
+        if "," in token:
+            if not re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?", token):
+                continue
+            token = token.replace(",", "")
+        try:
+            quantities.add(Decimal(token.rstrip(".,")))
+        except InvalidOperation:
+            continue
+    return quantities
+
+
 def extract_validated(extractor: LLMExtractor, text: str) -> Confirmation:
     for attempt in range(2):
         try:
@@ -45,18 +59,7 @@ def extract_validated(extractor: LLMExtractor, text: str) -> Confirmation:
                 update={"evidence_quote": source_quote(text, result.evidence_quote)}
             )
             for delivery in result.deliveries:
-                tokens = re.findall(r"(?<![\w.])\d[\d,.]*(?![\w.])", result.evidence_quote)
-                quantities = set()
-                for token in tokens:
-                    if "," in token:
-                        if not re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?", token):
-                            continue
-                        token = token.replace(",", "")
-                    try:
-                        quantities.add(Decimal(token.rstrip(".,")))
-                    except InvalidOperation:
-                        continue
-                if delivery.quantity not in quantities:
+                if delivery.quantity not in quantities_in_quote(result.evidence_quote):
                     raise ValueError("Extracted quantity is not supported by the quoted span")
                 if delivery.promised_date and not supports_date(
                     result.evidence_quote, delivery.promised_date

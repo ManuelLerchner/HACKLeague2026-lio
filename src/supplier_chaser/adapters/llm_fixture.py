@@ -1,5 +1,6 @@
 import json
 
+from supplier_chaser.domain.documents import DocumentItems
 from supplier_chaser.domain.models import Confirmation, Draft, POLine, Supplier
 
 QUESTIONS = {
@@ -27,6 +28,12 @@ QUESTIONS = {
 
 class FixtureLLM:
     model_version = "deterministic-fixture-v1"
+
+    def extract_document(self, text: str) -> DocumentItems:
+        marker = "DOCUMENT_JSON:"
+        if marker not in text:
+            raise ValueError("Fixture document extractor requires recorded DOCUMENT_JSON")
+        return DocumentItems.model_validate(json.loads(text.split(marker, 1)[1]))
 
     def extract_confirmation(self, text: str) -> Confirmation:
         # Synthetic messages explicitly embed their recorded structured extraction.

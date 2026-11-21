@@ -8,7 +8,7 @@ from supplier_chaser.adapters.repositories import CommitmentRepository
 from supplier_chaser.cases.state_machine import transition
 from supplier_chaser.commitments.reconcile import reconcile
 from supplier_chaser.config import Settings
-from supplier_chaser.domain.models import State
+from supplier_chaser.domain.models import Assessment, State
 from supplier_chaser.workflow.events import append_event
 from supplier_chaser.workflow.jobs import enqueue
 
@@ -42,7 +42,13 @@ def move(
     )
 
 
-def reconcile_line(session: Session, line_id: str, settings: Settings, now: datetime) -> None:
+def reconcile_line(
+    session: Session,
+    line_id: str,
+    settings: Settings,
+    now: datetime,
+    findings: list[dict] | None = None,
+) -> None:
     row = session.scalar(select(PORow).where(PORow.id == line_id).with_for_update())
     if row is None:
         return
@@ -55,6 +61,36 @@ def reconcile_line(session: Session, line_id: str, settings: Settings, now: date
         settings.confirmation_grace_hours,
         settings.launch_cutoff,
     )
+    from supplier_chaser.agent.discover import document_findings
+
+    findings = (
+        findings
+        if findings is not None
+        else (
+            document_findings(session, line_id)
+            if settings.auto_investigate_documents and settings.llm_provider != "fixture"
+            else []
+        )
+    )
+    unresolved = [
+        item
+        for item in findings
+        if item["status"] in {"pending", "ambiguous", "error", "needs_review"}
+    ]
+    if unresolved:
+        assessment = Assessment(
+            status="UNKNOWN",
+            reason="\n".join(item["summary"] for item in unresolved),
+            latest_claim=assessment.latest_claim,
+        )
+    elif findings and assessment.status == "UNKNOWN":
+        assessment = assessment.model_copy(
+            update={
+                "reason": "\n".join(item["summary"] for item in findings)
+                + "\n"
+                + assessment.reason,
+            }
+        )
     active = list(
         session.scalars(
             select(CaseRow).where(CaseRow.po_line_id == line_id, CaseRow.active_key.is_not(None))
@@ -90,8 +126,12 @@ def reconcile_line(session: Session, line_id: str, settings: Settings, now: date
             active.append(case)
             record_event(session, case, "case.created", {"reason": assessment.reason}, now)
         for case in active:
+            unchanged = case.evidence_summary == assessment.model_dump(mode="json")
             case.evidence_summary = assessment.model_dump(mode="json")
-            if case.state != State.ESCALATED:
+            if case.state != State.ESCALATED and not (
+                unchanged
+                and case.state in {State.DRAFT_READY, State.NEEDS_APPROVAL, State.AWAITING_REPLY}
+            ):
                 move(session, case, State.ESCALATED, now, assessment.reason)
         return
     issue_types = {i.issue_type for i in assessment.issues}
