@@ -16,6 +16,14 @@ pixi run demo-seed
 files into `.data/portal`. Read the token locally to sign in; do not paste it into logs or Git.
 Existing environments are never overwritten.
 
+For Docker Compose, copy `.env.example` to `.env` first if needed. Set `POSTGRES_PASSWORD`
+to a private password and set `COMPOSE_DATABASE_URL` to the matching PostgreSQL SQLAlchemy
+URL using host `db`, user/database `chaser`, and port `5432`. URL-encode special password
+characters. For host-side migrations and development processes, use the same credentials
+in `DATABASE_URL` with host `127.0.0.1`. Compose rejects missing or empty settings. Existing
+PostgreSQL volumes retain their original password; changing an environment variable does
+not rotate a database role's password.
+
 Two terminals:
 
 ```sh

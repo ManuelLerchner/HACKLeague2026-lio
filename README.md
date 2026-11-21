@@ -19,6 +19,10 @@ pixi run demo-seed
 Start `pixi run api` and `pixi run worker` in separate terminals. Open http://127.0.0.1:8000.
 Sign in using the generated `ADMIN_TOKEN` in `.env`. Do not share or commit that file.
 
+The Docker alternative requires private `POSTGRES_PASSWORD` and `COMPOSE_DATABASE_URL`
+settings first; see the [Compose setup](docs/demo-runbook.md#setup). No database password
+fallback is supplied in Compose.
+
 `demo-seed` creates synthetic input files, not hardcoded database cases. The worker detects files,
 parses orders and confirmations, opens cases, drafts multilingual questions and sends them to
 the local fixture outbox. To introduce a changed file and reply:
