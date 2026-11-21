@@ -1,7 +1,7 @@
 <section class="panel actions" aria-labelledby="next-step-heading">
 <h2 id="next-step-heading">What happens next</h2>
 {% set review = case.claim_review %}
-{% set settle = review and case.state in ['BLOCKED', 'ESCALATED'] and (review.terms or review.acknowledgeable or review.unit_missing) %}
+{% set settle = review and case.state in ['BLOCKED', 'ESCALATED', 'DRAFT_READY', 'NEEDS_APPROVAL'] and (review.terms or review.acknowledgeable or review.unit_missing) %}
 {% set retryable = case.messages | selectattr('can_retry_extraction') | list %}
 {% set held = case.messages | selectattr('direction', 'equalto', 'inbound') | selectattr('status', 'equalto', 'needs_review') | list %}
 <ul>
@@ -20,13 +20,13 @@
 <li><strong>Your action:</strong> Review the supplier reply and verify its sender and order attribution.</li>
 <li><strong>Blocked on:</strong> Your recorded review. Waiting alone will not progress this case.</li>
 <li><strong>Afterwards:</strong> The worker extracts the reply and rechecks the commitment. Conditions and costs still require authorization.</li>
-{% elif review and review.blocking and case.state in ['BLOCKED', 'ESCALATED'] %}
+{% elif review and review.blocking and case.state in ['BLOCKED', 'ESCALATED', 'DRAFT_READY', 'NEEDS_APPROVAL'] %}
 <li><strong>Your action:</strong> Take the decision outside this tool: {{ review.blocking.values() | join(' ') }}</li>
 <li><strong>Blocked on:</strong> An authorized decision. Waiting, rechecking or asking the supplier again will not resolve it.</li>
 <li><strong>Afterwards:</strong> Record the outcome in the case notes; the confirmation stays unresolved here.</li>
 {% elif settle %}
 <li><strong>Your action:</strong> Settle the supplier's confirmation below: check the pre-filled terms and acknowledge harmless flags.</li>
-<li><strong>Blocked on:</strong> Your review. The supplier already answered; another inquiry is not needed.</li>
+<li><strong>Blocked on:</strong> Your review. The supplier already answered; settle this before approving any new inquiry.</li>
 <li><strong>Afterwards:</strong> The worker rechecks the commitment. It resolves if quantity and date match the order.</li>
 {% elif case.state in ['BLOCKED', 'ESCALATED'] %}
 <li><strong>Your action:</strong> Review the findings below. If supplier clarification is needed, prepare an updated factual inquiry.</li>
@@ -57,7 +57,7 @@
 {% elif retryable %}<button data-retry-url="/api/v1/messages/{{ retryable[0].id }}/retry-extraction">Retry extraction</button>
 {% elif held %}<a class="button" href="#conversation">Review supplier reply ↓</a>
 {% elif settle %}<a class="button" href="#claim-review">Settle confirmation ↓</a>
-{% elif review and review.blocking and case.state in ['BLOCKED', 'ESCALATED'] %}
+{% elif review and review.blocking and case.state in ['BLOCKED', 'ESCALATED', 'DRAFT_READY', 'NEEDS_APPROVAL'] %}
 {% elif case.state in ['BLOCKED', 'ESCALATED'] %}<button data-action="draft" data-case="{{ case.id }}">Prepare updated clarification</button>
 {% elif case.state in ['DRAFT_READY', 'NEEDS_APPROVAL'] %}<a class="button" href="#conversation">Review draft and send ↓</a>
 {% elif case.state in ['NEW', 'INVESTIGATING'] %}<a class="button" href="/sources?q={{ case.po.po_number | urlencode }}">Investigate source evidence →</a><a class="button secondary" href="#buyer-actions">Go to draft action ↓</a>

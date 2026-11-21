@@ -4,7 +4,14 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from supplier_chaser.adapters.db import CaseRow, MessageRow, SourceFact, SourceFile, SupplierRow
+from supplier_chaser.adapters.db import (
+    CaseRow,
+    MessageRow,
+    SourceFact,
+    SourceFile,
+    SupplierRow,
+)
+from supplier_chaser.adapters.repositories import CommitmentRepository
 from supplier_chaser.agent.discover import relevant_documents
 from supplier_chaser.agent.draft import create_draft
 from supplier_chaser.agent.interpret_reply import (
@@ -13,6 +20,7 @@ from supplier_chaser.agent.interpret_reply import (
     validate_quantity_unit,
 )
 from supplier_chaser.cases.service import move, reconcile_line
+from supplier_chaser.commitments.reconcile import reconcile
 from supplier_chaser.communications.receive import supersede_drafts
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.documents import DocumentItems
@@ -302,7 +310,16 @@ def investigate_document(
                     )
                     .limit(1)
                 )
-                if held_reply:
+                # The supplier already answered with one applicable claim; what keeps it open
+                # (terms, flags, unit) is the buyer's to settle, not another inquiry. Late
+                # dates, quantity gaps and contradictions still get a factual question.
+                line_assessment = reconcile(
+                    po, CommitmentRepository(session).get_claims(po.key), now
+                )
+                answered = (
+                    line_assessment.status == "UNKNOWN" and line_assessment.latest_claim is not None
+                )
+                if held_reply or answered:
                     continue
                 if case.state in {State.NEW, State.ESCALATED}:
                     try:

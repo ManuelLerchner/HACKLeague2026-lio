@@ -378,3 +378,37 @@ def test_new_evidence_retires_rate_limited_inquiry(settings, factory, clock):
         request_document_investigation(session, source_id, clock.now(), retry=True)
         run_investigation(session, settings, clock, model, source_id)
         assert blocked.status == "superseded"
+
+
+def test_answered_missing_confirmation_gets_no_new_inquiry(settings, factory, clock):
+    from supplier_chaser.agent.discover import request_document_investigation
+    from supplier_chaser.domain.models import Confirmation
+    from supplier_chaser.ingestion.poll import save_claim
+
+    settings.llm_provider = "openai"
+    model = FixtureLLM()
+    with factory.begin() as session:
+        source_id = seed_document(session, clock.now())
+        run_investigation(session, settings, clock, model, source_id)
+        save_claim(
+            session,
+            Confirmation(
+                document_id="reply",
+                po_number="TEST-ORDER",
+                line_number="2",
+                supplier_id="SUP-TEST",
+                unit="PC",
+                deliveries=[{"quantity": "2600", "promised_date": "2027-01-04"}],
+                intent="confirmed",
+                terms="FOB Busan",
+            ),
+            clock.now(),
+        )
+        before = set(session.scalars(select(MessageRow.id)))
+        for case in session.scalars(select(CaseRow)):
+            case.state = "ESCALATED"
+        request_document_investigation(session, source_id, clock.now(), retry=True)
+        run_investigation(session, settings, clock, model, source_id)
+        new = session.scalars(select(MessageRow).where(MessageRow.id.not_in(before))).all()
+        lines = {session.get(CaseRow, m.case_id).po_line_id for m in new}
+        assert lines == {"TEST-ORDER/1"}
