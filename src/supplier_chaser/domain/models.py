@@ -123,11 +123,28 @@ class Check(Value):
     status: Literal["pass", "fail", "unknown"]
     detail: str
     sources: list[str] = []
+    # The stated value judged, so a decision covers exactly this value and nothing later.
+    value: str | None = None
     # The buyer decision a failure turns into; a pass or unknown needs none.
     decision: (
         Literal["terms_conflict", "agreement_expiry", "supplier_qualification", "proposed_change"]
         | None
     ) = None
+
+
+class Decision(Value):
+    kind: Literal["terms_conflict", "agreement_expiry", "supplier_qualification", "late_date"]
+    choice: str
+    value: dict = {}
+    reason: str
+    decided_by: str
+    decided_at: AwareDatetime
+    valid_until: date | None = None
+    po_line_id: str | None = None
+
+    @property
+    def label(self) -> str:
+        return f"{self.decided_by} on {self.decided_at:%d %b %Y}: {self.reason}"
 
 
 class Claim(Value):
@@ -140,6 +157,8 @@ class Claim(Value):
     acknowledged_risks: list[str] = []
     unit_source: str | None = None
     checks: list[Check] = []
+    # Latest promised date a buyer accepted for this order line, if any.
+    accepted_promise: date | None = None
 
 
 class Discrepancy(Value):

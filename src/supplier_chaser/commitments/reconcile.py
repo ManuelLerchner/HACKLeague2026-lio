@@ -100,7 +100,12 @@ def reconcile(
                 IssueType.QUANTITY_MISMATCH, "Confirmed total differs from ordered total.", latest
             )
         )
-    if any(d.day and d.day > po.requested_delivery for d in confirmation.deliveries):
+    accepted = latest.accepted_promise
+    # A buyer-accepted promise covers that date and earlier ones, never a later slip.
+    if any(
+        d.day and d.day > po.requested_delivery and not (accepted and d.day <= accepted)
+        for d in confirmation.deliveries
+    ):
         issues.append(
             issue(
                 IssueType.LATE_COMMITMENT,

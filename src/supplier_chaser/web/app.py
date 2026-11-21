@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
@@ -31,12 +31,14 @@ from supplier_chaser.adapters.db import (
     make_engine,
     sessions,
 )
+from supplier_chaser.cases.decisions import open_cases_for_supplier
 from supplier_chaser.cases.service import move, record_event
 from supplier_chaser.clock import Clock, SystemClock
 from supplier_chaser.communications.receive import supersede_drafts
 from supplier_chaser.config import Settings
 from supplier_chaser.domain.models import State
 from supplier_chaser.ingestion.document_review import claim_review_context
+from supplier_chaser.web.decisions import register_decision_routes
 from supplier_chaser.web.document_reviews import register_document_review_routes
 from supplier_chaser.web.evidence import preview_file
 from supplier_chaser.web.job_retries import register_retry_routes
@@ -315,6 +317,25 @@ def create_app(
             result = serialize_case(session, case)
             latest = (case.evidence_summary or {}).get("latest_claim")
             result["claim_review"] = claim_review_context(session, latest) if latest else None
+            result["supplier_open_cases"] = (
+                open_cases_for_supplier(session, result["supplier_id"])
+                if result["supplier_id"]
+                else 0
+            )
+            promised = [
+                date.fromisoformat(d["promised_date"])
+                for d in ((latest or {}).get("confirmation") or {}).get("deliveries", [])
+                if d.get("promised_date")
+            ]
+            requested = result["po"].get("requested_delivery")
+            result["late"] = (
+                {
+                    "promised": max(promised).isoformat(),
+                    "days": (max(promised) - date.fromisoformat(requested)).days,
+                }
+                if case.issue_type == "LATE_COMMITMENT" and promised and requested
+                else None
+            )
             messages = session.scalars(
                 select(MessageRow)
                 .where(MessageRow.case_id == case.id)
@@ -732,5 +753,6 @@ def create_app(
 
     register_retry_routes(app, factory, clock, authorized)
     register_document_review_routes(app, factory, clock, authorized, templates, status)
+    register_decision_routes(app, factory, clock, authorized)
     register_source_routes(app, factory, settings, clock, authorized, templates, status)
     return app

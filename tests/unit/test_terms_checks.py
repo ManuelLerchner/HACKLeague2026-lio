@@ -90,3 +90,55 @@ def test_missing_references_are_skipped_not_assumed():
         "incoterm": ("pass", None),
         "payment_terms": ("pass", None),
     }
+
+
+def decision(kind, choice, **extra):
+    from datetime import UTC, datetime
+
+    from supplier_chaser.domain.models import Decision
+
+    return Decision(
+        kind=kind,
+        choice=choice,
+        reason="Checked with the category manager.",
+        decided_by="Buyer",
+        decided_at=datetime(2026, 11, 21, tzinfo=UTC),
+        **extra,
+    )
+
+
+def test_decision_settles_only_the_value_and_dates_it_covers():
+    reference = REFERENCE.model_copy(update={"po_incoterm": "DDP Hamburg"})
+    accept_exw = decision(
+        "terms_conflict", "accept_supplier_terms", value={"accepted": "EXW Busan"}
+    )
+    confirmation = claim("EXW Busan")
+    checks = terms_checks(confirmation, reference, [accept_exw])
+    assert outcome_of(checks)["incoterm"] == ("pass", None)
+    assert terms_verified(confirmation, checks)
+    # A different stated term later is not covered by the earlier acceptance.
+    other = terms_checks(claim("FCA Busan"), reference, [accept_exw])
+    assert outcome_of(other)["incoterm"] == ("fail", "terms_conflict")
+    renewal = decision("agreement_expiry", "renewal_confirmed", valid_until=date(2027, 6, 30))
+    assert outcome_of(terms_checks(claim("", date(2027, 1, 11)), REFERENCE, [renewal]))[
+        "agreement_validity"
+    ] == ("pass", None)
+    assert outcome_of(terms_checks(claim("", date(2027, 9, 1)), REFERENCE, [renewal]))[
+        "agreement_validity"
+    ] == ("fail", "agreement_expiry")
+
+
+def test_later_rejection_overrides_earlier_acceptance():
+    from datetime import UTC, datetime
+
+    reference = REFERENCE.model_copy(update={"qualification": "conditional"})
+    accepted = decision("supplier_qualification", "accept_conditional")
+    blocked = decision("supplier_qualification", "block").model_copy(
+        update={"decided_at": datetime(2026, 11, 22, tzinfo=UTC)}
+    )
+    checks = terms_checks(claim(""), reference, [accepted, blocked])
+    assert outcome_of(checks)["supplier_qualification"] == ("fail", "supplier_qualification")
+
+
+def outcome_of(checks):
+    return {c.name: (c.status, c.decision) for c in checks}

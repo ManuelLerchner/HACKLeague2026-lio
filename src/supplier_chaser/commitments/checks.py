@@ -4,9 +4,10 @@ A check passes only when every reference we hold agrees; a disagreement becomes 
 buyer decision, and missing references leave the result unknown rather than passed.
 """
 
+from collections.abc import Sequence
 from datetime import date
 
-from supplier_chaser.domain.models import Check, Confirmation, Value
+from supplier_chaser.domain.models import Check, Confirmation, Decision, Value
 from supplier_chaser.domain.terms import UNVERIFIABLE_TERMS, incoterms, payment_terms
 
 
@@ -51,6 +52,7 @@ def _compare(
                     name=name,
                     status="fail",
                     decision="terms_conflict",
+                    value=value,
                     detail=f"Supplier states {value}; " + "; ".join(conflicts) + ".",
                     sources=sources,
                 )
@@ -61,6 +63,7 @@ def _compare(
                 Check(
                     name=name,
                     status="pass",
+                    value=value,
                     detail=f"{value} matches {labels}.",
                     sources=sources,
                 )
@@ -68,7 +71,16 @@ def _compare(
     return checks
 
 
-def terms_checks(confirmation: Confirmation, reference: TermsReference) -> list[Check]:
+def terms_checks(
+    confirmation: Confirmation,
+    reference: TermsReference,
+    decisions: Sequence[Decision] = (),
+) -> list[Check]:
+    checks = _terms_checks(confirmation, reference)
+    return [settle(check, confirmation, decisions) for check in checks]
+
+
+def _terms_checks(confirmation: Confirmation, reference: TermsReference) -> list[Check]:
     checks = []
     if reference.qualification:
         qualified = reference.qualification.casefold() == "qualified"
@@ -170,3 +182,43 @@ def terms_verified(confirmation: Confirmation, checks: list[Check]) -> bool:
         and bool(relevant)
         and all(c.status == "pass" for c in relevant)
     )
+
+
+# A decision settles a failure only with an accepting choice that covers this exact claim.
+ACCEPTING = {
+    "terms_conflict": "accept_supplier_terms",
+    "agreement_expiry": "renewal_confirmed",
+    "supplier_qualification": "accept_conditional",
+}
+REJECTING = {
+    "terms_conflict": "order_terms_apply",
+    "agreement_expiry": "not_renewed",
+    "supplier_qualification": "block",
+}
+
+
+def covers(decision: Decision, check: Check, confirmation: Confirmation) -> bool:
+    if decision.kind == "terms_conflict" and decision.value.get("accepted") != check.value:
+        return False
+    days = [d.day for d in confirmation.deliveries if d.day]
+    return decision.valid_until is None or all(day <= decision.valid_until for day in days)
+
+
+def settle(check: Check, confirmation: Confirmation, decisions: Sequence[Decision]) -> Check:
+    if check.status != "fail" or check.decision not in ACCEPTING:
+        return check
+    relevant = [d for d in decisions if d.kind == check.decision]
+    for decision in sorted(relevant, key=lambda d: d.decided_at, reverse=True):
+        if decision.choice == REJECTING[decision.kind]:
+            return check.model_copy(
+                update={"detail": f"{check.detail} Decided against by {decision.label}"}
+            )
+        if decision.choice == ACCEPTING[decision.kind] and covers(decision, check, confirmation):
+            return check.model_copy(
+                update={
+                    "status": "pass",
+                    "decision": None,
+                    "detail": f"{check.detail} Accepted by {decision.label}",
+                }
+            )
+    return check

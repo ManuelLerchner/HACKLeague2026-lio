@@ -1,0 +1,50 @@
+{% set checks = (case.assessment.latest_claim or {}).get("checks", []) %}
+{% set pending = checks | selectattr("status", "equalto", "fail") | selectattr("decision") | list %}
+{% if (pending or case.late) and case.state not in ['RESOLVED', 'CANCELLED'] and not case.held_reply %}
+<section class="panel actions" id="decisions">
+<h2>Your decision</h2>
+<p>The rules found a disagreement only a buyer can settle. Each decision is recorded with your name and reason and can be read on every affected case.</p>
+{% for check in pending %}
+<form data-decision class="decision">
+<input type="hidden" name="kind" value="{{ check.decision }}"><input type="hidden" name="supplier_id" value="{{ case.supplier_id }}">
+{% if check.decision == 'terms_conflict' %}
+<h3>Which terms apply for {{ case.supplier }}?</h3>
+<p>{{ check.detail }}</p>
+<input type="hidden" name="accepted" value="{{ check.value }}">
+{% elif check.decision == 'agreement_expiry' %}
+<h3>Is the {{ case.supplier }} agreement renewed?</h3>
+<p>{{ check.detail }}</p>
+<label>Renewed agreement valid until<input type="date" name="valid_until"></label>
+{% elif check.decision == 'supplier_qualification' %}
+<h3>Accept deliveries from {{ case.supplier }} while qualification is not final?</h3>
+<p>{{ check.detail }}</p>
+<label>Accept deliveries up to (optional)<input type="date" name="valid_until"></label>
+{% else %}
+<h3>Proposed change to commercial terms</h3>
+<p>{{ check.detail }} This needs an authorized commercial decision outside this tool; nothing here accepts it.</p>
+{% endif %}
+{% if check.decision != 'proposed_change' %}
+<p class="muted">Applies to all {{ case.supplier_open_cases }} open case(s) of {{ case.supplier }}.</p>
+<label>Your name<input name="decided_by" required minlength="2" maxlength="100" data-remember-reviewer></label>
+<label>Reason<textarea name="reason" required minlength="10" maxlength="2000" placeholder="What you checked and with whom"></textarea></label>
+{% if check.decision == 'terms_conflict' %}<button name="choice" value="accept_supplier_terms">Accept {{ check.value }} for this supplier</button><button class="secondary" name="choice" value="order_terms_apply">Our order terms apply; ask the supplier</button>
+{% elif check.decision == 'agreement_expiry' %}<button name="choice" value="renewal_confirmed">Renewal confirmed</button><button class="secondary" name="choice" value="not_renewed">Not renewed; keep open</button>
+{% else %}<button name="choice" value="accept_conditional">Accept deliveries</button><button class="secondary" name="choice" value="block">Do not accept</button>{% endif %}
+<p data-decision-result role="status"></p>
+{% endif %}
+</form>
+{% endfor %}
+{% if case.late %}
+<form data-decision class="decision">
+<input type="hidden" name="kind" value="late_date"><input type="hidden" name="case_id" value="{{ case.id }}"><input type="hidden" name="promised" value="{{ case.late.promised }}">
+<h3>Accept delivery on {{ case.late.promised }}, {{ case.late.days }} day(s) after the requested {{ case.po.requested_delivery }}?</h3>
+<p class="muted">Applies to this order line only. A later slip opens the case again.</p>
+<label>Your name<input name="decided_by" required minlength="2" maxlength="100" data-remember-reviewer></label>
+<label>Reason<textarea name="reason" required minlength="10" maxlength="2000" placeholder="Why the later date works, e.g. stock covers launch"></textarea></label>
+<button name="choice" value="accept_date">Accept {{ case.late.promised }}</button>
+<p data-decision-result role="status"></p>
+</form>
+<p>Not acceptable? Use “Draft factual clarification” below to ask the supplier for an earlier date.</p>
+{% endif %}
+</section>
+{% endif %}

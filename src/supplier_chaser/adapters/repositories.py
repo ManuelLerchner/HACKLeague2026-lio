@@ -1,8 +1,10 @@
-from sqlalchemy import select
+from datetime import date
+
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from supplier_chaser.adapters.db import ClaimRow, PORow, SourceFact, SourceFile
-from supplier_chaser.domain.models import Claim, Confirmation, POLine
+from supplier_chaser.adapters.db import ClaimRow, DecisionRow, PORow, SourceFact, SourceFile
+from supplier_chaser.domain.models import Claim, Confirmation, Decision, POLine
 from supplier_chaser.domain.units import canonical_unit
 
 # Our own material master. Read by exact path so a supplier upload can never stand in for it.
@@ -27,6 +29,12 @@ class CommitmentRepository:
         from supplier_chaser.ingestion.references import terms_reference
 
         reference = terms_reference(self.session, line_id)
+        decisions = self.decisions(po.supplier_id, line_id) if po else []
+        accepted = [
+            date.fromisoformat(d.value["promised"])
+            for d in decisions
+            if d.kind == "late_date" and d.choice == "accept_date"
+        ]
         claims = []
         for r in rows:
             confirmation = Confirmation.model_validate(r.data)
@@ -42,7 +50,7 @@ class CommitmentRepository:
                 confirmation = confirmation.model_copy(update={"unit": canonical_unit(master_unit)})
                 unit_source = MATERIAL_MASTER_PATH
             review = self._buyer_review(r)
-            checks = terms_checks(confirmation, reference)
+            checks = terms_checks(confirmation, reference, decisions)
             claims.append(
                 Claim(
                     id=r.id,
@@ -52,6 +60,7 @@ class CommitmentRepository:
                     confirmation=confirmation,
                     unit_source=unit_source,
                     checks=checks,
+                    accepted_promise=max(accepted, default=None),
                     **{
                         **review,
                         # A buyer's recorded review stands; otherwise the rules decide.
@@ -61,6 +70,31 @@ class CommitmentRepository:
                 )
             )
         return claims
+
+    def decisions(self, supplier_id: str, line_id: str) -> list[Decision]:
+        """Active decisions for the supplier, plus those scoped to this order line."""
+        rows = self.session.scalars(
+            select(DecisionRow).where(
+                DecisionRow.supplier_id == supplier_id,
+                DecisionRow.revoked_at.is_(None),
+                or_(DecisionRow.po_line_id.is_(None), DecisionRow.po_line_id == line_id),
+            )
+        )
+        return [
+            Decision.model_validate(
+                {
+                    "kind": row.kind,
+                    "choice": row.choice,
+                    "value": row.value,
+                    "reason": row.reason,
+                    "decided_by": row.decided_by,
+                    "decided_at": row.decided_at,
+                    "valid_until": row.valid_until,
+                    "po_line_id": row.po_line_id,
+                }
+            )
+            for row in rows
+        ]
 
     def master_unit(self, part_number: str) -> str | None:
         if not hasattr(self, "_master_units"):
