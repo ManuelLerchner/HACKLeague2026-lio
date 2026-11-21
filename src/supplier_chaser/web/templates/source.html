@@ -1,0 +1,39 @@
+{% extends 'base.html' %}{% block content %}
+<section class="page-heading"><div class="eyebrow">SOURCE REVIEW · {{ source.parse_status }}</div><h1>Review this source.</h1><p>{{ source.path }}</p><a href="/sources/{{ source.id }}/download">Download original evidence</a></section>
+{% if source.error %}<div class="notice">{{ source.error }}</div>{% endif %}
+{% for table in tables %}
+<section class="panel"><div class="panel-heading"><h2>{{ table.locator }} · {{ table.data.rows|length }} rows</h2></div>
+<div class="table-scroll"><table><thead><tr>{% for column in table.data.columns %}<th>{{ column }}</th>{% endfor %}</tr></thead><tbody>{% for row in table.data.rows[:5] %}<tr>{% for column in table.data.columns %}<td>{{ row['values'][column] }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>
+{% if table.applied %}<div class="notice">Mapping applied to {{ table.applied.normalized_json.row_count }} rows. Original evidence is preserved.</div>
+{% else %}
+<form method="get" class="mapping-form"><label>What does this table contain?<select name="kind"><option value="po" {{ 'selected' if kind == 'po' }}>Purchase orders</option><option value="supplier" {{ 'selected' if kind == 'supplier' }}>Supplier contacts</option><option value="confirmation" {{ 'selected' if kind == 'confirmation' }}>Supplier confirmations</option></select></label><button type="submit">Choose type</button></form>
+<form class="mapping-form" data-mapping-form data-table="{{ table.id }}" data-kind="{{ kind }}">
+<p>Suggestions only match column names. Verify each choice and any fixed value against the source. Empty fields remain unknown.</p>
+<div class="table-scroll"><table><thead><tr><th>Field</th><th>Source column</th><th>Fixed value, if evidenced</th><th>Date format, if needed</th></tr></thead><tbody>
+{% for field in fields %}<tr data-field="{{ field }}"><td>{{ field|replace('_', ' ') }}</td><td><select data-column><option value="">Unknown / not supplied</option>{% for column in table.data.columns %}<option value="{{ column }}" {{ 'selected' if table.suggestion.columns.get(field) == column }}>{{ column }}</option>{% endfor %}</select></td><td><input data-constant aria-label="Fixed {{ field }}"></td><td>{% if field in ['ordered_at', 'requested_delivery', 'promised_date'] %}<input data-date-format placeholder="ISO by default; e.g. %m/%d/%Y" aria-label="{{ field }} date format">{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>
+<div class="mapping-options"><label>Decimal separator<select name="decimal_separator"><option value=".">Point</option><option value=",">Comma</option></select></label><label>Thousands separator<select name="thousands_separator"><option value="">None</option><option value=",">Comma</option><option value=".">Point</option><option value=" ">Space</option></select></label>
+<label>Only import rows where<select name="filter_column"><option value="">All rows</option>{% for column in table.data.columns %}<option>{{ column }}</option>{% endfor %}</select></label><label>Accepted values, separated by commas<input name="filter_values" placeholder="e.g. open"></label></div>
+<label>Review note<textarea name="note" placeholder="Explain fixed values, scope and any assumptions"></textarea></label>
+{% if kind == 'supplier' %}<label><input type="checkbox" name="trust_contacts"> I verified this source is trusted supplier master data and may establish recipient addresses.</label>{% endif %}
+<div class="mapping-buttons"><button type="submit" value="preview">Preview all rows</button><button type="submit" value="apply">Approve mapping and queue import</button></div><pre class="mapping-result" aria-live="polite"></pre>
+</form>{% endif %}</section>{% endfor %}
+{% for fact in texts %}
+<section class="panel"><div class="panel-heading"><h2>{{ fact.record_locator }} · extracted text</h2></div>
+<div class="mapping-form"><p>This is untrusted source text. Review the document and its order attribution before extracting a proposed commitment.</p>
+<pre class="source-text">{{ fact.normalized_json.text[:30000] }}</pre>
+{% if status.llm_provider != "fixture" and matching_orders[fact.id] %}
+<form data-extraction-form data-fact="{{ fact.id }}">
+<label>Link this evidence to an existing order<select name="po_line_id" required><option value="">Select an order line</option>
+{% for po in matching_orders[fact.id] %}<option value="{{ po.id }}">{{ po.id }} · {{ po.part_number }}</option>{% endfor %}
+</select></label><button type="submit">Extract proposed commitment</button><pre class="mapping-result" aria-live="polite"></pre></form>
+{% elif not has_imported_orders %}
+<div class="notice">No order lines have been imported yet. <a href="/sources?q=purchase">Review and map an order table</a> before linking a supplier confirmation.</div>
+{% elif not matching_orders[fact.id] %}
+<div class="notice">This text does not identify a matching order and material. Keep policies and general reference documents as evidence; commitment extraction is available for documents that identify an imported order line.</div>
+{% else %}<div class="notice">A model provider is required to extract a proposed commitment. The original text remains available for manual review.</div>{% endif %}
+</div></section>{% endfor %}
+{% if not tables and not texts %}<section class="panel"><div class="mapping-form">No reviewable table or text was extracted. Download the original for manual review; no claims were invented.</div></section>{% endif %}
+{% for fact in extractions %}<section class="panel"><div class="mapping-form"><h2>Extracted supplier claim</h2><p>{{ fact.normalized_json.po_number }} / {{ fact.normalized_json.line_number }} · {{ fact.confidence }}</p><pre class="source-text">{{ fact.normalized_json | tojson(indent=2) }}</pre></div></section>{% endfor %}
+{% if source_jobs %}<section class="panel"><div class="mapping-form"><h2>Review actions</h2>{% for job in source_jobs %}<p>{{ job.job_type }} · {{ job.status }}{% if job.last_error %} · {{ job.last_error }}{% endif %}</p>{% endfor %}</div></section>{% endif %}
+{% endblock %}

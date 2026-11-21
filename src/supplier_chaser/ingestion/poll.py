@@ -49,11 +49,12 @@ def project(
     path: str,
     now: datetime,
     extractor: LLMExtractor,
+    trusted_contacts: bool = False,
 ) -> str | None:
     data = fact.normalized_json
     if fact.fact_type == "supplier":
         supplier = Supplier.model_validate(data)
-        trusted = path in settings.trusted_supplier_paths
+        trusted = path in settings.trusted_supplier_paths or trusted_contacts
         if not trusted:
             raise ValueError("Supplier contacts require an explicitly trusted metadata path")
         existing = session.get(SupplierRow, supplier.id)
@@ -157,6 +158,7 @@ def poll_portal(
             (directory / digest).write_bytes(content)
             source.blob_ref = blob_ref
             parsed = parse(metadata.path, content)
+            review_required = False
             with session.begin_nested():
                 for item in parsed:
                     fact = SourceFact(
@@ -168,7 +170,32 @@ def poll_portal(
                     )
                     session.add(fact)
                     session.flush()
-                    line_id = project(session, fact, settings, metadata.path, now, extractor)
+                    if item.kind == "table":
+                        from supplier_chaser.ingestion.review import reuse_mapping
+
+                        try:
+                            with session.begin_nested():
+                                applied = reuse_mapping(
+                                    session, fact, metadata.path, settings, now, extractor
+                                )
+                            review_required = review_required or not applied
+                        except (ValueError, TypeError):
+                            review_required = True
+                        continue
+                    if item.kind == "text":
+                        if settings.llm_provider != "fixture":
+                            review_required = True
+                            continue
+                        try:
+                            with session.begin_nested():
+                                line_id = project(
+                                    session, fact, settings, metadata.path, now, extractor
+                                )
+                        except (ValueError, TypeError):
+                            review_required = True
+                            continue
+                    else:
+                        line_id = project(session, fact, settings, metadata.path, now, extractor)
                     if line_id:
                         enqueue(
                             session,
@@ -177,7 +204,14 @@ def poll_portal(
                             f"reconcile:{source.id}:{line_id}",
                             now,
                         )
-                source.parse_status = "parsed" if parsed else "unhandled"
+                source.parse_status = (
+                    "needs_review" if review_required else ("parsed" if parsed else "unhandled")
+                )
+                source.error = (
+                    "Review source structure or extraction before importing"
+                    if review_required
+                    else None
+                )
                 append_event(
                     session,
                     source.id,

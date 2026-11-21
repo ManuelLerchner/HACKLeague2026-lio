@@ -6,7 +6,7 @@ from openai import OpenAI
 
 from supplier_chaser.adapters.llm_fixture import FixtureLLM
 from supplier_chaser.adapters.llm_provider import OpenAILLM
-from supplier_chaser.agent.interpret_reply import extract_validated
+from supplier_chaser.agent.interpret_reply import extract_validated, source_quote
 from supplier_chaser.domain.models import Confirmation
 
 
@@ -90,3 +90,30 @@ def test_embedded_instructions_remain_a_risk():
         payload
     )
     assert "instructions" in extract_validated(FixtureLLM(), text).risks
+
+
+def test_pdf_wrapping_restores_original_span_without_accepting_paraphrase():
+    text = "Quantity\n36,000\nDelivery\n2026-11-22"
+    assert source_quote(text, "Quantity 36,000 Delivery 2026-11-22") == text
+    with pytest.raises(ValueError):
+        source_quote(text, "36,000 units arriving on 2026-11-22")
+
+
+@pytest.mark.parametrize("quantity,quoted,accepted", [(36000, "36,000", True), (12, "112", False)])
+def test_quantity_evidence_requires_a_complete_number(quantity, quoted, accepted):
+    payload = {
+        "document_id": "c",
+        "supplier_id": "s",
+        "po_number": "p",
+        "line_number": "1",
+        "unit": "EA",
+        "deliveries": [{"quantity": quantity}],
+        "intent": "confirmed",
+        "evidence_quote": f"Quantity {quoted} EA",
+    }
+    text = payload["evidence_quote"] + "\nCONFIRMATION_JSON:" + json.dumps(payload)
+    if accepted:
+        assert extract_validated(FixtureLLM(), text).quantity == quantity
+    else:
+        with pytest.raises(ValueError, match="quantity"):
+            extract_validated(FixtureLLM(), text)

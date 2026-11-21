@@ -64,6 +64,18 @@ class SourceFact(Base):
     confidence: Mapped[str] = mapped_column(default="deterministic")
 
 
+class SourceMapping(Base):
+    __tablename__ = "source_mappings"
+    id: Mapped[str] = mapped_column(primary_key=True, default=uid)
+    path: Mapped[str] = mapped_column(index=True)
+    table_locator: Mapped[str]
+    schema_fingerprint: Mapped[str]
+    definition: Mapped[dict] = mapped_column(JSON)
+    source_file_id: Mapped[str] = mapped_column(ForeignKey("source_files.id"))
+    approved_by: Mapped[str]
+    approved_at: Mapped[datetime] = mapped_column(UTCDateTime)
+
+
 class SupplierRow(Base):
     __tablename__ = "suppliers"
     id: Mapped[str] = mapped_column(primary_key=True)

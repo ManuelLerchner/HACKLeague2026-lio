@@ -1,0 +1,61 @@
+# Reviewing unfamiliar sources
+
+The importer separates structure discovery from approved business interpretation. A CSV,
+flat JSON table or worksheet with unfamiliar columns is stored as a reviewable table.
+PDF/text content is preserved even when extraction fails. Original bytes, checksum and row/page
+references remain private evidence; column-name suggestions never create business records.
+
+Open **Source review**, choose a file and select whether the table contains purchase orders,
+supplier contacts or confirmations. Map source columns, provide only evidenced fixed values,
+and select date/number formats explicitly. Optional row filters restrict the import to relevant
+records. Preview validates every selected row before approval queues a durable import job.
+Only an explicitly trusted supplier mapping can establish recipient addresses.
+
+Approved mappings are scoped to the exact source path, table locator and column fingerprint.
+Reordered columns are supported. Added/removed columns require review. Repeated polls and
+repeated approval have one logical effect. Conflicting PO versions and changed supplier
+addresses return to review instead of overwriting established evidence. A mapped version cannot
+be silently remapped in place; corrected source versions require a new reviewed import.
+
+Calendar-only order dates stay dates. Missing units stay unknown. A fixed unit is appropriate
+only after checking the material master for all selected rows; put that provenance in the review
+note. Importing ERP status or a promised date does not establish a supplier commitment or receipt.
+
+Worksheets may have title/group-heading rows: discovery proposes the first complete unique
+header row and preserves the preceding text. Review the proposal against the original file.
+The current limits are 10,000 rows, 200 columns and 50 MB expanded workbook data. Nested JSON,
+scanned images, DOCX and layouts without usable text/table structure remain manual review items.
+
+## AI extraction
+
+With a model configured, source text offers extraction only when it identifies an imported PO
+and material. Select the corresponding order line explicitly. Policy documents without order
+references show an explanation instead of an empty selector. Extraction is a separate queued
+action; the portal poll does not call the model for every unfamiliar document.
+
+The selected order supplies attribution only. Quantities/dates must be supported by a verbatim
+quote from the original source, not by the supplied order context. Confirmations retain their
+conditions and risks. Uncertain units, identities, dates or terms keep cases unresolved.
+The original source stays reviewable; an extracted promise never proves physical delivery.
+
+## Separate local live workspace
+
+Create a private `.env.live` with a separate PostgreSQL database and `DATA_DIR`. Keep all
+credentials out of Git. `SUPPLIER_CHASER_ENV_FILE` selects the configuration at process startup:
+
+```sh
+SUPPLIER_CHASER_ENV_FILE=.env.live pixi run db-upgrade
+SUPPLIER_CHASER_ENV_FILE=.env.live pixi run uvicorn supplier_chaser.web.app:create_app --factory --host 127.0.0.1 --port 8001
+SUPPLIER_CHASER_ENV_FILE=.env.live pixi run worker
+```
+
+Set `PORTAL_MODE=http`, a reviewed portal contract, `MAIL_MODE=smtp_imap`, and
+`LLM_PROVIDER=openai` only after their connection checks pass. Use `AUTO_DRAFT=false` during
+bulk import so creating cases does not trigger bulk model calls. Choose a case to draft manually.
+Changing `.env.live` requires restarting the API and worker.
+
+Start with `DRY_RUN=true` and `OUTBOUND_MAIL_ENABLED=false`. For an authorized live test, configure
+an exact verified recipient allowlist, registered sender and verified mailbox, then enable
+sending and approve one factual draft. Send caps include previously recorded sent messages.
+Live IMAP messages remain subject to identity review; the current adapter does not automatically
+trust From headers or resolve cases from a real-mail promise.

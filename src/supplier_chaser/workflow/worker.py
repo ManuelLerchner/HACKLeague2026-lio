@@ -7,15 +7,18 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from supplier_chaser.adapters.db import JobRow, PORow, SystemRow, make_engine, sessions
+from supplier_chaser.adapters.db import JobRow, PORow, SourceFact, SystemRow, make_engine, sessions
 from supplier_chaser.agent.draft import create_draft
+from supplier_chaser.agent.extract_source import extract_source
 from supplier_chaser.bootstrap import llm_adapter, mail_gateway, portal_client
 from supplier_chaser.cases.service import reconcile_line
 from supplier_chaser.clock import Clock, SystemClock
 from supplier_chaser.communications.receive import receive
 from supplier_chaser.communications.send import send_message
 from supplier_chaser.config import Settings
+from supplier_chaser.ingestion.mapping import MappingSpec
 from supplier_chaser.ingestion.poll import poll_portal
+from supplier_chaser.ingestion.review import apply_mapping
 from supplier_chaser.ports.llm import LLMDrafter, LLMExtractor
 from supplier_chaser.ports.mail import MailGateway
 from supplier_chaser.ports.portal import PortalClient
@@ -61,7 +64,10 @@ class Worker:
                 with self.factory.begin() as session:
                     current = session.get(JobRow, job.id)
                     if current and current.lease_owner == self.owner:
-                        current.status = "failed" if current.attempts >= 5 else "queued"
+                        permanent = isinstance(exc, (ValueError, TypeError))
+                        current.status = (
+                            "failed" if permanent or current.attempts >= 5 else "queued"
+                        )
                         current.last_error = f"{type(exc).__name__}: job requires inspection"
                         retry_after = (
                             exc.response.headers.get("retry-after")
@@ -109,6 +115,28 @@ class Worker:
                     self.settings,
                     now,
                     payload.get("reminder", False),
+                )
+            elif job.job_type == "apply_mapping":
+                table = session.get(SourceFact, payload["table_fact_id"])
+                if table is None:
+                    raise ValueError("Source table not found")
+                apply_mapping(
+                    session,
+                    table,
+                    MappingSpec.model_validate(payload["mapping"]),
+                    self.settings,
+                    now,
+                    self.extractor,
+                    payload["approved_by"],
+                )
+            elif job.job_type == "extract_source":
+                extract_source(
+                    session,
+                    payload["source_fact_id"],
+                    payload["po_line_id"],
+                    self.extractor,
+                    now,
+                    payload["requested_by"],
                 )
             else:
                 raise ValueError("Unknown job type")

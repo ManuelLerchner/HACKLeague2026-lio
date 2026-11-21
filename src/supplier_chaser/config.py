@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Literal
 
@@ -8,7 +9,9 @@ from supplier_chaser.domain.policies import LAUNCH_CUTOFF
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=os.getenv("SUPPLIER_CHASER_ENV_FILE", ".env"), extra="ignore"
+    )
     database_url: str = "postgresql+psycopg://chaser:chaser@127.0.0.1:5432/chaser"
     portal_mode: Literal["fixture", "http"] = "fixture"
     portal_base_url: str = ""
@@ -47,3 +50,4 @@ class Settings(BaseSettings):
     follow_up_hours: int = 4
     max_reminders: int = 1
     max_supplier_sends_per_day: int = 10
+    auto_draft: bool = True
