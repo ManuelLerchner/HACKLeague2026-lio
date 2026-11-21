@@ -1,0 +1,6 @@
+.git
+.pixi
+.env*
+.data
+artifacts
+__pycache__

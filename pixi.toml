@@ -1,0 +1,48 @@
+[workspace]
+name = "supplier-chaser"
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[dependencies]
+python = "3.12.*"
+fastapi = ">=0.115,<1"
+uvicorn = ">=0.32,<1"
+pydantic = ">=2.10,<3"
+pydantic-settings = ">=2.6,<3"
+sqlalchemy = ">=2.0,<3"
+alembic = ">=1.14,<2"
+psycopg = ">=3.2,<4"
+httpx = ">=0.28,<1"
+jinja2 = ">=3.1,<4"
+python-multipart = ">=0.0.20,<1"
+openpyxl = ">=3.1,<4"
+pypdf = ">=5,<7"
+openai = ">=2,<3"
+itsdangerous = ">=2.2,<3"
+pytest = ">=8,<10"
+pytest-cov = ">=6,<8"
+ruff = ">=0.11,<1"
+mypy = ">=1.15,<2"
+syrupy = ">=4.9,<6"
+time-machine = ">=2.16,<3"
+respx = ">=0.22,<1"
+postgresql = "17.*"
+hatchling = ">=1.27,<2"
+
+[pypi-dependencies]
+supplier-chaser = { path = ".", editable = true }
+
+[tasks]
+api = "uvicorn supplier_chaser.web.app:create_app --factory --reload --host 127.0.0.1 --port 8000"
+worker = "python -m supplier_chaser.workflow.worker"
+test = "pytest -q"
+test-unit = "pytest -q tests/unit"
+test-freeze = "pytest -q -m freeze"
+test-live = "pytest -q tests/live --tb=no"
+lint = "ruff check . && ruff format --check ."
+format = "ruff format ."
+typecheck = "mypy"
+db-upgrade = "alembic upgrade head"
+db-local = "python scripts/local_db.py"
+demo-seed = "python -m supplier_chaser.demo seed"
+demo-replay = "python -m supplier_chaser.demo replay"

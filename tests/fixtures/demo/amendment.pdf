@@ -1,0 +1,54 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 684 >>
+stream
+BT /F1 10 Tf 45 800 Td 14 TL
+(SYNTHETIC SUPPLIER CONFIRMATION - NOT CUSTOMER DATA) Tj T*
+(Amendment: 1000 EA for 2026-11-22, replacing DEMO-C1.) Tj T*
+(CONFIRMATION_JSON:) Tj T*
+({) Tj T*
+(  "document_id": "DEMO-C2",) Tj T*
+(  "po_number": "DEMO-4100",) Tj T*
+(  "line_number": "10",) Tj T*
+(  "supplier_id": "SYN-A",) Tj T*
+(  "unit": "EA",) Tj T*
+(  "deliveries": [) Tj T*
+(    {) Tj T*
+(      "quantity": "1000",) Tj T*
+(      "promised_date": "2026-11-22") Tj T*
+(    }) Tj T*
+(  ],) Tj T*
+(  "intent": "confirmed",) Tj T*
+(  "supersedes": [) Tj T*
+(    "DEMO-C1") Tj T*
+(  ],) Tj T*
+(  "evidence_quote": "Amendment: 1000 EA for 2026-11-22, replacing DEMO-C1.") Tj T*
+(}) Tj T*
+ET
+endstream
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000311 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+1046
+%%EOF

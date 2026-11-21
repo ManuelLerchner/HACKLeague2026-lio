@@ -1,0 +1,3 @@
+kind,po_number,line_number,supplier_id,part_number,ordered_qty,unit,requested_delivery,ordered_at,launch_critical,lead_time_hours
+po,DEMO-4100,10,SYN-A,INSERT-A,1200,EA,2026-11-22,2026-11-19T09:00:00Z,true,3
+po,DEMO-4200,20,SYN-B,SLEEVE-B,600,EA,2026-11-23,2026-11-19T09:00:00Z,false,2

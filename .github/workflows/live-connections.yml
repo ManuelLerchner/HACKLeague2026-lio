@@ -1,0 +1,64 @@
+name: live connections
+
+on:
+  workflow_dispatch:
+    inputs:
+      check_llm:
+        description: Check configured OpenAI model access (no generation)
+        type: boolean
+        default: false
+      check_deployment:
+        description: Check deployed PostgreSQL and API/worker readiness
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-connections
+  cancel-in-progress: false
+
+jobs:
+  connections:
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'workflow_dispatch' || vars.RUN_LIVE_CHECKS == 'true')
+    environment: Dev
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@v0.9.1
+        with:
+          pixi-version: v0.84.1
+          cache: true
+      - run: pixi install --locked
+      - name: Check connections without sending mail
+        run: pixi run test-live
+        env:
+          RUN_LIVE_TESTS: "1"
+          CHECK_LLM: ${{ inputs.check_llm || vars.CHECK_LLM || 'false' }}
+          CHECK_DEPLOYMENT: ${{ inputs.check_deployment || vars.CHECK_DEPLOYMENT || 'false' }}
+          PORTAL_BASE_URL: ${{ vars.PORTAL_BASE_URL || secrets.PORTAL_BASE_URL }}
+          PORTAL_TEAM_TOKEN: ${{ secrets.PORTAL_TEAM_TOKEN }}
+          PORTAL_CONTRACT_JSON: ${{ secrets.PORTAL_CONTRACT_JSON }}
+          MAIL_FROM: ${{ vars.MAIL_FROM || secrets.MAIL_FROM }}
+          SMTP_HOST: ${{ vars.SMTP_HOST || secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT || '587' }}
+          SMTP_USER: ${{ vars.SMTP_USER || secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          IMAP_HOST: ${{ vars.IMAP_HOST || secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ vars.IMAP_PORT || '993' }}
+          IMAP_USER: ${{ vars.IMAP_USER || secrets.IMAP_USER }}
+          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ vars.LLM_MODEL || 'gpt-4.1-mini' }}
+          LIVE_DATABASE_URL: ${{ secrets.LIVE_DATABASE_URL }}
+          LIVE_APP_URL: ${{ vars.LIVE_APP_URL }}
+          DRY_RUN: "true"
+          OUTBOUND_MAIL_ENABLED: "false"
