@@ -2,7 +2,7 @@ import hashlib
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from supplier_chaser.adapters.db import CaseRow, MessageRow, PORow, SupplierRow
 from supplier_chaser.cases.service import move, record_event
@@ -54,21 +54,30 @@ def send_block_reasons(
     return reasons
 
 
+def lock_case_and_message(session: Session, message_id: str) -> tuple[CaseRow, MessageRow] | None:
+    # Every writer locks the case before its messages; case_events inserts also take a key
+    # share on the case row, so locking the message first deadlocks against a concurrent send.
+    case_id = session.scalar(select(MessageRow.case_id).where(MessageRow.id == message_id))
+    if case_id is None:
+        return None
+    case = session.scalar(select(CaseRow).where(CaseRow.id == case_id).with_for_update())
+    message = session.scalar(
+        select(MessageRow).where(MessageRow.id == message_id).with_for_update()
+    )
+    if case is None or message is None:
+        return None
+    return case, message
+
+
 def send_message(
     factory: sessionmaker, message_id: str, gateway: MailGateway, settings: Settings, now: datetime
 ) -> None:
     with factory.begin() as session:
-        case_id = session.scalar(select(MessageRow.case_id).where(MessageRow.id == message_id))
-        if case_id is None:
+        locked = lock_case_and_message(session, message_id)
+        if locked is None:
             return
-        # Approval/reply review also locks the case before changing its messages.
-        case = session.scalar(select(CaseRow).where(CaseRow.id == case_id).with_for_update())
-        if case is None:
-            return
-        message = session.scalar(
-            select(MessageRow).where(MessageRow.id == message_id).with_for_update()
-        )
-        if message is None or message.status in {
+        case, message = locked
+        if message.status in {
             "sent",
             "send_uncertain",
             "failed_before_send",
@@ -195,12 +204,9 @@ def send_message(
     except Exception:
         result = SendResult(status="send_uncertain", detail="Transport raised after send intent")
     with factory.begin() as session:
-        message = session.scalar(
-            select(MessageRow).where(MessageRow.id == message_id).with_for_update()
-        )
-        assert message is not None
-        case = session.get(CaseRow, message.case_id)
-        assert case is not None
+        locked = lock_case_and_message(session, message_id)
+        assert locked is not None
+        case, message = locked
         if message.status != "sending":
             return
         message.status = result.status
